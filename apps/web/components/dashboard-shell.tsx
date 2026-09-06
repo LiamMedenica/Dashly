@@ -19,6 +19,7 @@ export function DashboardShell({
   rows: string[][]
 }) {
   const [paletteId, setPaletteId] = useState(DEFAULT_PALETTE_ID)
+  const [customColor, setCustomColor] = useState("#6366f1")
 
   return (
     <SidebarInset>
@@ -27,9 +28,11 @@ export function DashboardShell({
         sheetUrl={sheetUrl}
         paletteId={paletteId}
         onPaletteChange={setPaletteId}
+        customColor={customColor}
+        onCustomColorChange={color => { setCustomColor(color); setPaletteId("custom") }}
       />
       <div className="flex flex-1 flex-col">
-        <DashboardGrid columns={columns} rows={rows} paletteId={paletteId} />
+        <DashboardGrid columns={columns} rows={rows} paletteId={paletteId} customColor={customColor} />
       </div>
     </SidebarInset>
   )

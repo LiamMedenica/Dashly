@@ -52,3 +52,15 @@ export const COLOR_PALETTES: ColorPalette[] = [
 ]
 
 export const DEFAULT_PALETTE_ID = "slate"
+
+// Builds a palette from an arbitrary hex color (#rrggbb).
+// Uses alpha-suffixed hex variants for slices so the hue stays consistent.
+export function buildCustomPalette(hex: string): ColorPalette {
+  return {
+    id: "custom",
+    label: "Custom",
+    primary:   { light: hex, dark: hex },
+    secondary: { light: hex + "bb", dark: hex + "bb" },
+    slices: [hex, hex + "dd", hex + "aa", hex + "77", hex + "55"],
+  }
+}

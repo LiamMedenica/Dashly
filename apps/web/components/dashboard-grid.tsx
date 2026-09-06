@@ -7,7 +7,7 @@ import {
   ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent,
   type ChartConfig as ShadChartConfig,
 } from "@workspace/ui/components/chart"
-import { COLOR_PALETTES, type ColorPalette } from "@/lib/palettes"
+import { COLOR_PALETTES, buildCustomPalette, type ColorPalette } from "@/lib/palettes"
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect
 
@@ -26,7 +26,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Calendar } from "@workspace/ui/components/calendar"
 import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/native-select"
-import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon } from "lucide-react"
+import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
 
@@ -882,13 +882,17 @@ function TableCard({ item, columns, rows }: {
 
 // ─── GridItem ─────────────────────────────────────────────────────────────────
 
-function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClick, children }: {
+function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onEdit, onDuplicate, onDelete, children }: {
   item: LayoutItem
   canvasW: number
+  isSelected: boolean
+  onSelect: () => void
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
   onDragStart: () => void
   onDragEnd: () => void
-  onRightClick?: (e: React.MouseEvent) => void
+  onEdit: () => void
+  onDuplicate: () => void
+  onDelete: () => void
   children: React.ReactNode
 }) {
   const [live,  setLive]  = useState<{ x: number; y: number } | null>(null)
@@ -910,7 +914,7 @@ function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClic
 
     function onMove(ev: MouseEvent) {
       const dx = ev.clientX - sx, dy = ev.clientY - sy
-      if (!moved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) { moved = true; onDragStart() }
+      if (!moved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) { moved = true; onDragStart(); onSelect() }
       if (!moved) return
       const rx = bx + dx, ry = by + dy
       setLive({ x: rubberBand(rx, minX, maxX), y: ry < minY ? minY - (minY - ry) * 0.25 : ry })
@@ -927,6 +931,7 @@ function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClic
 
     function onUp() {
       if (moved) { onUpdate(item.id, { x: snapX, y: snapY }); setLive(null); setGhost(null); onDragEnd() }
+      else { onSelect() }
       detach()
     }
 
@@ -934,7 +939,7 @@ function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClic
 
     document.addEventListener("mousemove", onMove)
     document.addEventListener("mouseup",   onUp)
-  }, [item, canvasW, onUpdate, onDragStart, onDragEnd])
+  }, [item, canvasW, onUpdate, onDragStart, onDragEnd, onSelect])
 
   return (
     <>
@@ -946,14 +951,48 @@ function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClic
         className={`absolute group/item select-none ${isDragging ? "z-50 cursor-grabbing" : "cursor-grab"}`}
         style={{
           left: dispX, top: dispY, width: item.w, height: item.h,
-          zIndex: isDragging ? 50 : undefined,
+          zIndex: isDragging ? 50 : isSelected ? 10 : undefined,
           transition: isDragging ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
         }}
         onMouseDown={onMouseDown}
-        onContextMenu={onRightClick}
+        onContextMenu={e => { e.preventDefault(); onSelect() }}
       >
-        <div className="w-full h-full">{children}</div>
+        <div
+          className="w-full h-full rounded-xl"
+          style={{ boxShadow: isSelected ? "0 0 0 2px var(--primary)" : undefined }}
+        >{children}</div>
         {!isDragging && <ResizeHandles item={item} canvasW={canvasW} onUpdate={onUpdate} />}
+
+        {isSelected && !isDragging && (
+          <div
+            className="absolute top-2 right-2 z-20 flex items-center rounded-lg border border-border bg-background/90 backdrop-blur-sm shadow-md overflow-hidden"
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <button
+              onClick={e => { e.stopPropagation(); onEdit() }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              <PencilIcon className="size-3" />
+              Edit
+            </button>
+            <div className="w-px h-4 bg-border" />
+            <button
+              onClick={e => { e.stopPropagation(); onDuplicate() }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              <CopyIcon className="size-3" />
+              Duplicate
+            </button>
+            <div className="w-px h-4 bg-border" />
+            <button
+              onClick={e => { e.stopPropagation(); onDelete() }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-destructive hover:bg-accent transition-colors"
+            >
+              <Trash2Icon className="size-3" />
+              Delete
+            </button>
+          </div>
+        )}
       </div>
     </>
   )
@@ -961,16 +1000,20 @@ function GridItem({ item, canvasW, onUpdate, onDragStart, onDragEnd, onRightClic
 
 // ─── DashboardGrid ────────────────────────────────────────────────────────────
 
-export function DashboardGrid({ columns = [], rows = [], paletteId }: {
+export function DashboardGrid({ columns = [], rows = [], paletteId, customColor }: {
   columns?: ColumnInfo[]
   rows?: string[][]
   paletteId?: string
+  customColor?: string
 }) {
-  const palette = COLOR_PALETTES.find(p => p.id === paletteId) ?? COLOR_PALETTES[0]!
+  const palette = paletteId === "custom" && customColor
+    ? buildCustomPalette(customColor)
+    : COLOR_PALETTES.find(p => p.id === paletteId) ?? COLOR_PALETTES[0]!
   const canvasRef = useRef<HTMLDivElement>(null)
   const [canvasW,  setCanvasW]  = useState(0)
   const [layout,   setLayout]   = useState<LayoutItem[]>([])
   const [dragging, setDragging] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const columnsRef = useRef(columns)
   const rowsRef    = useRef(rows)
@@ -1059,7 +1102,6 @@ export function DashboardGrid({ columns = [], rows = [], paletteId }: {
   // ── stat card dialog state ──
   const [pendingPos,      setPendingPos]      = useState<{ x: number; y: number } | null>(null)
   const [editingId,       setEditingId]       = useState<string | null>(null)
-  const [contextMenu,     setContextMenu]     = useState<{ x: number; y: number; id: string } | null>(null)
 
   const [configCol,        setConfigCol]        = useState("")
   const [configAgg,        setConfigAgg]        = useState<Agg>("sum")
@@ -1230,6 +1272,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId }: {
 
     window.addEventListener("sidebar-drag-table", handler)
     return () => window.removeEventListener("sidebar-drag-table", handler)
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedId(null) }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
   }, [])
 
   const handleDelete = useCallback((id: string) => {
@@ -1814,6 +1862,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId }: {
         className="flex-1 relative overflow-x-hidden"
         data-dashboard-canvas
         style={{ minHeight: canvasMinH }}
+        onMouseDown={() => setSelectedId(null)}
       >
         {dragging && <div className="fixed inset-0 z-40 cursor-grabbing" />}
         <div className={`dot-grid pointer-events-none absolute inset-0 transition-opacity duration-500 ${dragging ? "opacity-100" : "opacity-0"}`} />
@@ -1825,11 +1874,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId }: {
         {layout.map(item => (
           <GridItem
             key={item.id} item={item} canvasW={canvasW}
+            isSelected={selectedId === item.id}
+            onSelect={() => setSelectedId(item.id)}
             onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd}
-            onRightClick={(item.stat || item.chart || item.table) ? (e) => {
-              e.preventDefault()
-              setContextMenu({ x: e.clientX, y: e.clientY, id: item.id })
-            } : undefined}
+            onEdit={() => handleEdit(item.id)}
+            onDuplicate={() => { handleDuplicate(item.id); setSelectedId(null) }}
+            onDelete={() => { handleDelete(item.id); setSelectedId(null) }}
           >
             {item.type === "table"
               ? <TableCard item={item} columns={columns} rows={rows} />
@@ -1875,35 +1925,6 @@ export function DashboardGrid({ columns = [], rows = [], paletteId }: {
         document.body
       )}
 
-      {contextMenu && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} />
-          <div
-            className="fixed z-50 min-w-[140px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-              onClick={() => { handleDuplicate(contextMenu.id); setContextMenu(null) }}
-            >
-              Duplicate
-            </button>
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-              onClick={() => { handleEdit(contextMenu.id); setContextMenu(null) }}
-            >
-              Edit
-            </button>
-            <div className="my-1 h-px bg-border" />
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm text-destructive hover:bg-accent"
-              onClick={() => { handleDelete(contextMenu.id); setContextMenu(null) }}
-            >
-              Delete
-            </button>
-          </div>
-        </>
-      )}
     </PaletteContext.Provider>
   )
 }
