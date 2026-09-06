@@ -21,6 +21,9 @@ packages/ui/       Shared components (@workspace/ui/*)
 | `apps/web/components/app-sidebar.tsx` | Sidebar — chart type picker (draggable items), data columns list |
 | `apps/web/lib/sheets.ts` | `extractSheetId` + `fetchSheetData` (Google Sheets CSV, no API key) |
 | `apps/web/lib/analyze.ts` | Column type detection (`date / number / category / text / id`) |
+| `apps/web/lib/demo-data.ts` | Deterministic fake e-commerce dataset + `buildDemoLayout(canvasW)` |
+| `apps/web/lib/generate-layout.ts` | Haiku-powered layout generation — prompt, validation, trend computation |
+| `apps/web/lib/palettes.ts` | 6 color palettes (Violet default) + `buildCustomPalette` |
 
 ## Tech stack gotchas
 
@@ -114,15 +117,37 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [x] **Tables** — config dialog with column checkboxes (select/deselect all) and period filter
   - Sticky header, scrollable body, 100-row limit with "Showing N of M rows" footer
 - [x] Sidebar hover previews for all tile types (fixed pixel dimensions, no ResponsiveContainer in portals)
+- [x] **Demo dashboard** — `/dashboard?demo=true` renders a fake e-commerce dataset with a pre-built layout. `buildDemoLayout(canvasW)` is called client-side after canvas width is measured so tiles fill the full width at any resolution. `ResizeObserver` re-runs it on window resize.
+- [x] **Color palettes** — 6 palettes (Violet, Sky, Indigo, Rose, Teal, Coral) with lighter, more inviting oklch values. Custom HSV color picker in the header. Default is Violet.
+- [x] **AI dashboard generation** — "Generate dashboard →" on the landing page dialog calls Claude Haiku server-side with column schema + 20 sample rows. Haiku returns a `LayoutItem[]` JSON array in SNAP units; server scales to pixels, validates bounds/column references, right-aligns rows, computes stat values and trend comparisons, then passes as `initialLayout` to the canvas. Falls back to empty canvas on failure. `ANTHROPIC_API_KEY` in `apps/web/.env.local`.
+  - Granularity detection: inspects median gap between unique dates → daily/weekly/monthly/yearly → drives trend label ("vs last week" etc.) and is included in the Haiku prompt so chart titles match.
 
 ## What's next (priority order)
 
-1. Auth — Clerk or NextAuth
-2. Share flow — gate behind signup
-3. Stripe billing — $9.99/month
-4. Saved dashboard hub (sidebar list)
-5. Cross-chart filters
-6. Landing page additions (pricing, feature screenshots)
+### Canvas features (do these before auth/billing — makes the product worth paying for)
+
+1. **Cross-chart filters / slicers** — click a chart element (bar, pie slice, line point) to set a global filter that all tiles respect.
+   - Implementation: add `FilterContext` (similar to `PaletteContext`) holding `{ column: string; value: string } | null`. Recharts `onClick` on Bar/Pie/Line sets it. All `aggregateByX` / `filterRows` calls check it and add an extra filter pass. A dismissible chip in the header shows the active filter. Escape clears it.
+   - This is the #1 feature that turns Dashly from "pretty charts" into "actual BI tool".
+
+2. **Text box tile** — new tile `type: "text"` with a `text?: { content: string; fontSize?: number }` config. Renders a Card with a contenteditable or textarea. Drag from sidebar like other tiles.
+
+3. **Filter bar / slicer panel** — persistent strip above the canvas with dropdown slicers per categorical column. Selecting a value sets the `FilterContext`.
+
+### SaaS
+
+4. Auth — Clerk (simplest Next.js integration)
+5. Share flow — generate a read-only shareable URL, gate behind signup
+6. Stripe billing — $9.99/month, usage-gated on save/share
+7. Saved dashboard hub — sidebar list of past dashboards persisted to DB (PlanetScale or Supabase)
+8. Landing page — pricing section, feature screenshots, hero GIF
+
+**AI generation gotchas**:
+- Positions are in SNAP units (integers) in the prompt, multiplied by 24 server-side after parsing
+- `rightAlignRows()` nudges the rightmost tile in each row to flush with `MAX_RIGHT` (only if gap ≤ 2 SNAP units)
+- Stat card `value` is always computed server-side from real data — never trusted from AI response
+- Trend uses `detectGranularity()` (median gap between unique dates) to pick daily/weekly/monthly/yearly comparison period
+- `.env.local` is gitignored; `.env.example` documents the required `ANTHROPIC_API_KEY`
 
 ## Dev
 
@@ -130,5 +155,7 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 # from Dashly/Dashly/
 npm run dev
 ```
+
+Add `ANTHROPIC_API_KEY=sk-ant-...` to `apps/web/.env.local` to enable AI dashboard generation.
 
 Test data CSVs are in `test-data/` — use `ecommerce_sales.csv` or `sales_pipeline.csv` with a local server, or upload to Google Sheets and paste the share URL.

@@ -26,11 +26,12 @@ export default function Page() {
 
   const isValid = url.trim() !== "" && isGoogleSheetsUrl(url)
 
-  const handleCreate = () => {
+  const navigate = (generate: boolean) => {
     if (!isValid) return
     const params = new URLSearchParams()
     params.set("url", url.trim())
     if (name.trim()) params.set("name", name.trim())
+    if (generate) params.set("generate", "true")
     router.push(`/dashboard?${params.toString()}`)
     setOpen(false)
   }
@@ -55,9 +56,18 @@ export default function Page() {
           Paste a link. Get a beautiful, shareable dashboard in seconds.
         </p>
 
-        <Button className="h-11 px-6 text-base" onClick={() => setOpen(true)}>
-          Create a dashboard →
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button className="h-11 px-6 text-base" onClick={() => setOpen(true)}>
+            Create a dashboard →
+          </Button>
+          <Button
+            variant="outline"
+            className="h-11 px-6 text-base"
+            onClick={() => router.push("/dashboard?demo=true")}
+          >
+            See a demo
+          </Button>
+        </div>
       </main>
 
       <footer className="py-6 text-center text-xs text-muted-foreground">
@@ -102,12 +112,15 @@ export default function Page() {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="ghost" className="sm:mr-auto" onClick={() => navigate(false)} disabled={!isValid}>
+              Start blank
+            </Button>
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!isValid}>
-              Create dashboard →
+            <Button onClick={() => navigate(true)} disabled={!isValid}>
+              Generate dashboard →
             </Button>
           </DialogFooter>
         </DialogContent>

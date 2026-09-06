@@ -245,7 +245,7 @@ function aggregateByXMulti(
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
-type ChartType = "bar" | "line" | "area" | "pie"
+export type ChartType = "bar" | "line" | "area" | "pie"
 type ChartConfig = {
   type: ChartType
   xCol: string
@@ -264,12 +264,12 @@ type ChartConfig = {
   showLegend?: boolean
   showCenter?: boolean
 }
-type StatConfig = {
+export type StatConfig = {
   column: string; agg: Agg; label: string; value: string
   filter?: FilterPeriod; filterFrom?: string; filterTo?: string; filterLabel?: string
   trend?: string; trendUp?: boolean; trendLabel?: string
 }
-type TableConfig = {
+export type TableConfig = {
   title: string
   cols: string[]
   filter?: FilterPeriod
@@ -277,7 +277,7 @@ type TableConfig = {
   filterTo?: string
   filterLabel?: string
 }
-type LayoutItem = {
+export type LayoutItem = {
   id: string; x: number; y: number; w: number; h: number
   type: "stat" | "chart" | "table"
   stat?: StatConfig
@@ -339,19 +339,23 @@ let cancelActiveDrag: (() => void) | null = null
 
 const HANDLE = 6
 
-function ResizeHandles({ item, canvasW, onUpdate }: {
+function ResizeHandles({ item, canvasW, onUpdate, onResizeStart, onResizeEnd }: {
   item: LayoutItem
   canvasW: number
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
+  onResizeStart?: () => void
+  onResizeEnd?: () => void
 }) {
   function makeHandler(getMove: (dx: number, dy: number) => Partial<LayoutItem>) {
     return (e: React.MouseEvent) => {
       e.stopPropagation(); e.preventDefault()
       const sx = e.clientX, sy = e.clientY
+      onResizeStart?.()
       function onMove(ev: MouseEvent) { onUpdate(item.id, getMove(ev.clientX - sx, ev.clientY - sy)) }
       function onUp() {
         document.removeEventListener("mousemove", onMove)
         document.removeEventListener("mouseup",   onUp)
+        onResizeEnd?.()
       }
       document.addEventListener("mousemove", onMove)
       document.addEventListener("mouseup",   onUp)
@@ -895,8 +899,9 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
   onDelete: () => void
   children: React.ReactNode
 }) {
-  const [live,  setLive]  = useState<{ x: number; y: number } | null>(null)
-  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
+  const [live,       setLive]       = useState<{ x: number; y: number } | null>(null)
+  const [ghost,      setGhost]      = useState<{ x: number; y: number } | null>(null)
+  const [isResizing, setIsResizing] = useState(false)
 
   const isDragging = live !== null
   const dispX = live?.x ?? item.x
@@ -952,7 +957,7 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
         style={{
           left: dispX, top: dispY, width: item.w, height: item.h,
           zIndex: isDragging ? 50 : isSelected ? 10 : undefined,
-          transition: isDragging ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
+          transition: (isDragging || isResizing) ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
         }}
         onMouseDown={onMouseDown}
         onContextMenu={e => { e.preventDefault(); onSelect() }}
@@ -961,7 +966,15 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
           className="w-full h-full rounded-xl"
           style={{ boxShadow: isSelected ? "0 0 0 2px var(--primary)" : undefined }}
         >{children}</div>
-        {!isDragging && <ResizeHandles item={item} canvasW={canvasW} onUpdate={onUpdate} />}
+        {!isDragging && (
+          <ResizeHandles
+            item={item}
+            canvasW={canvasW}
+            onUpdate={onUpdate}
+            onResizeStart={() => setIsResizing(true)}
+            onResizeEnd={() => setIsResizing(false)}
+          />
+        )}
 
         {isSelected && !isDragging && (
           <div
@@ -1000,18 +1013,20 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
 
 // ─── DashboardGrid ────────────────────────────────────────────────────────────
 
-export function DashboardGrid({ columns = [], rows = [], paletteId, customColor }: {
+export function DashboardGrid({ columns = [], rows = [], paletteId, customColor, initialLayout, initialLayoutFn }: {
   columns?: ColumnInfo[]
   rows?: string[][]
   paletteId?: string
   customColor?: string
+  initialLayout?: LayoutItem[]
+  initialLayoutFn?: (canvasW: number) => LayoutItem[]
 }) {
   const palette = paletteId === "custom" && customColor
     ? buildCustomPalette(customColor)
     : COLOR_PALETTES.find(p => p.id === paletteId) ?? COLOR_PALETTES[0]!
   const canvasRef = useRef<HTMLDivElement>(null)
   const [canvasW,  setCanvasW]  = useState(0)
-  const [layout,   setLayout]   = useState<LayoutItem[]>([])
+  const [layout,   setLayout]   = useState<LayoutItem[]>(initialLayout ?? [])
   const [dragging, setDragging] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -1027,7 +1042,20 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor 
     if (!el) return
     const w = el.clientWidth - SNAP
     setCanvasW(w)
-    setLayout(buildLayout(w))
+    if (initialLayoutFn) setLayout(initialLayoutFn(w))
+    else if (!initialLayout) setLayout(buildLayout(w))
+
+    let timer: ReturnType<typeof setTimeout>
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        const newW = el.clientWidth - SNAP
+        setCanvasW(newW)
+        if (initialLayoutFn) setLayout(initialLayoutFn(newW))
+      }, 150)
+    })
+    ro.observe(el)
+    return () => { ro.disconnect(); clearTimeout(timer) }
   }, [])
 
   // ── collision-aware move ──
@@ -1037,64 +1065,61 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor 
       const next = { ...item, ...patch }
 
       if ('x' in patch && 'y' in patch && !('w' in patch) && !('h' in patch)) {
-        let layout = prev.map(it => it.id === id ? next : it)
+        const layout = prev.map(it => it.id === id ? next : it)
         const c = layout.find(it =>
           it.id !== id &&
           rectOverlaps(next.x, next.y, next.w, next.h, it.x - SNAP, it.y - SNAP, it.w + SNAP * 2, it.h + SNAP * 2)
         )
-        if (c) {
-          const bCX = next.x + next.w / 2, bCY = next.y + next.h / 2
-          const cCX = c.x + c.w / 2,       cCY = c.y + c.h / 2
-          const pastHalfway = bCX > c.x && bCX < c.x + c.w && bCY > c.y && bCY < c.y + c.h
+        if (!c) return layout
 
-          const dx = cCX - bCX, dy = cCY - bCY
-          let ex = c.x, ey = c.y
-          if (Math.abs(dx) >= Math.abs(dy)) {
-            ex = dx > 0 ? snapTo(next.x + next.w + SNAP) : snapTo(next.x - c.w - SNAP)
-          } else {
-            ey = dy > 0 ? snapTo(next.y + next.h + SNAP) : snapTo(next.y - c.h - SNAP)
-          }
+        // Use minimum-overlap axis to decide escape direction — more accurate than
+        // center-to-center vector when tiles have very different sizes.
+        const overlapX = Math.min(next.x + next.w, c.x + c.w) - Math.max(next.x, c.x)
+        const overlapY = Math.min(next.y + next.h, c.y + c.h) - Math.max(next.y, c.y)
+        const bCX = next.x + next.w / 2, bCY = next.y + next.h / 2
+        const cCX = c.x + c.w / 2,       cCY = c.y + c.h / 2
 
-          const escapeOthers = layout.filter(it => it.id !== c.id)
-          const escapeFree =
-            ex >= SNAP && ex + c.w <= canvasW - SNAP && ey >= SNAP &&
-            !escapeOthers.some(o => rectOverlaps(ex, ey, c.w, c.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
-
-          if (escapeFree) return layout.map(it => it.id === c.id ? { ...it, x: ex, y: ey } : it)
-
-          if (pastHalfway) {
-            const snapped = prev.map(it => it.id === id ? { ...it, x: c.x, y: c.y } : it)
-            const pos = resolveCollision(c.id, c.x, c.y, c.w, c.h, snapped, canvasW, true)!
-            return snapped.map(it => it.id === c.id ? { ...it, ...pos } : it)
-          } else {
-            const ddx = next.x - item.x, ddy = next.y - item.y
-            const dragEscapeCandidates = [
-              { x: snapTo(c.x + c.w + SNAP), y: next.y },
-              { x: snapTo(c.x - next.w - SNAP), y: next.y },
-              { x: next.x, y: snapTo(c.y + c.h + SNAP) },
-              { x: next.x, y: snapTo(c.y - next.h - SNAP) },
-            ].sort((a, b) => {
-              const dotA = (a.x - next.x) * ddx + (a.y - next.y) * ddy
-              const dotB = (b.x - next.x) * ddx + (b.y - next.y) * ddy
-              return dotB - dotA
-            })
-            const bOthers = layout.filter(it => it.id !== id)
-            const escapePos = dragEscapeCandidates.find(p =>
-              p.x >= SNAP && p.x + next.w <= canvasW - SNAP && p.y >= SNAP &&
-              !bOthers.some(o => rectOverlaps(p.x, p.y, next.w, next.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
-            )
-            if (escapePos) return layout.map(it => it.id === id ? { ...it, x: escapePos.x, y: escapePos.y } : it)
-            return prev.map(it => it.id === id ? { ...it, x: item.x, y: item.y } : it)
-          }
+        let ex = c.x, ey = c.y
+        if (overlapX <= overlapY) {
+          ex = cCX > bCX ? snapTo(next.x + next.w + SNAP) : snapTo(next.x - c.w - SNAP)
+        } else {
+          ey = cCY > bCY ? snapTo(next.y + next.h + SNAP) : snapTo(next.y - c.h - SNAP)
         }
-        return layout
+
+        const cOthers = layout.filter(it => it.id !== c.id)
+        const cFree =
+          ex >= SNAP && ex + c.w <= canvasW - SNAP && ey >= SNAP &&
+          !cOthers.some(o => rectOverlaps(ex, ey, c.w, c.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
+
+        // C can slide out of the way — B lands at target, C moves to its escape spot.
+        if (cFree) return layout.map(it => it.id === c.id ? { ...it, x: ex, y: ey } : it)
+
+        // C is blocked — find the closest free spot for B adjacent to C instead.
+        const bCandidates = [
+          { x: snapTo(c.x + c.w + SNAP), y: next.y },
+          { x: snapTo(c.x - next.w - SNAP), y: next.y },
+          { x: next.x, y: snapTo(c.y + c.h + SNAP) },
+          { x: next.x, y: snapTo(c.y - next.h - SNAP) },
+        ]
+        const bOthers = layout.filter(it => it.id !== id)
+        const bSnap = bCandidates
+          .filter(p =>
+            p.x >= SNAP && p.x + next.w <= canvasW - SNAP && p.y >= SNAP &&
+            !bOthers.some(o => rectOverlaps(p.x, p.y, next.w, next.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
+          )
+          .sort((a, b) => Math.hypot(a.x - next.x, a.y - next.y) - Math.hypot(b.x - next.x, b.y - next.y))[0]
+
+        if (bSnap) return layout.map(it => it.id === id ? { ...it, x: bSnap.x, y: bSnap.y } : it)
+
+        // No space anywhere near C — revert B to its last committed position.
+        return prev.map(it => it.id === id ? { ...it, x: item.x, y: item.y } : it)
       }
 
       return prev.map(it => it.id === id ? next : it)
     }), [canvasW])
 
-  const onDragStart = useCallback(() => setDragging(true),  [])
-  const onDragEnd   = useCallback(() => setDragging(false), [])
+  const onDragStart = useCallback(() => setDragging(true), [])
+  const onDragEnd   = useCallback(() => { setDragging(false); setSelectedId(null) }, [])
 
   // ── drop ghost (shared between stat and chart drags) ──
   const [dropGhost, setDropGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
