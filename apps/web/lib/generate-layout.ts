@@ -3,8 +3,8 @@ import { type ColumnInfo } from "./analyze"
 import { type LayoutItem } from "@/components/dashboard-grid"
 
 const S = 24
-const CANVAS_UNITS = 48
-const MAX_RIGHT = (CANVAS_UNITS - 1) * S  // 1128px
+const CANVAS_UNITS = 66  // matches LOGICAL_W (67*24=1608) minus one SNAP for right margin
+const MAX_RIGHT = (CANVAS_UNITS - 1) * S  // 1560px
 
 type Granularity = "daily" | "weekly" | "monthly" | "yearly"
 
@@ -39,7 +39,7 @@ function detectGranularity(rows: string[][], dateCol: ColumnInfo): Granularity {
 
   const gaps: number[] = []
   for (let i = 1; i < Math.min(unique.length, 30); i++) {
-    gaps.push((unique[i]! - unique[i - 1]!) / 86_400_000) // days
+    gaps.push((unique[i]! - unique[i - 1]!) / 86_400_000)
   }
   gaps.sort((a, b) => a - b)
   const median = gaps[Math.floor(gaps.length / 2)]!
@@ -53,6 +53,34 @@ function detectGranularity(rows: string[][], dateCol: ColumnInfo): Granularity {
 function weekOf(d: Date): number {
   const start = new Date(d.getFullYear(), 0, 1)
   return Math.ceil(((d.getTime() - start.getTime()) / 86_400_000 + start.getDay() + 1) / 7)
+}
+
+// Rich per-column summary so the model understands the actual data distribution.
+function summarizeColumns(columns: ColumnInfo[], rows: string[][]): string {
+  return columns.map(col => {
+    if (col.type === "number") {
+      const vals = rows.map(r => parseNum(r[col.index] ?? "")).filter(n => isFinite(n))
+      if (!vals.length) return `  ${col.name} (number): no valid values`
+      const sum = vals.reduce((a, b) => a + b, 0)
+      return `  ${col.name} (number): count=${vals.length}, sum=${formatValue(sum)}, avg=${formatValue(sum / vals.length)}, min=${formatValue(Math.min(...vals))}, max=${formatValue(Math.max(...vals))}`
+    }
+    if (col.type === "date") {
+      const dates = rows.map(r => new Date(r[col.index] ?? "")).filter(d => !isNaN(d.getTime()))
+      if (!dates.length) return `  ${col.name} (date): no valid dates`
+      const minD = new Date(Math.min(...dates.map(d => d.getTime()))).toISOString().slice(0, 10)
+      const maxD = new Date(Math.max(...dates.map(d => d.getTime()))).toISOString().slice(0, 10)
+      return `  ${col.name} (date): ${dates.length} records, range ${minD} → ${maxD}`
+    }
+    if (col.type === "category") {
+      const counts = new Map<string, number>()
+      rows.forEach(r => { const v = r[col.index] ?? ""; counts.set(v, (counts.get(v) ?? 0) + 1) })
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+      const top5 = sorted.slice(0, 5).map(([v, n]) => `"${v}"(${n})`).join(", ")
+      const more = sorted.length > 5 ? ` + ${sorted.length - 5} more` : ""
+      return `  ${col.name} (category): ${sorted.length} unique — ${top5}${more}`
+    }
+    return `  ${col.name} (${col.type})`
+  }).join("\n")
 }
 
 function computeStatValue(column: string, agg: string, columns: ColumnInfo[], rows: string[][]): string {
@@ -156,6 +184,7 @@ function validateLayout(tiles: LayoutItem[], columns: ColumnInfo[]): boolean {
     if (t.w < S * 3 || t.h < S * 3) return false
     if (t.type === "stat"  && !colNames.has(t.stat?.column ?? "")) return false
     if (t.type === "chart" && (!colNames.has(t.chart?.xCol ?? "") || !colNames.has(t.chart?.yCol ?? ""))) return false
+    if (t.type === "table" && !(t.table?.cols ?? []).every(c => colNames.has(c))) return false
   }
   for (let i = 0; i < tiles.length; i++)
     for (let j = i + 1; j < tiles.length; j++)
@@ -163,83 +192,117 @@ function validateLayout(tiles: LayoutItem[], columns: ColumnInfo[]): boolean {
   return true
 }
 
+type GenerateResult =
+  | { tiles: LayoutItem[]; error: null }
+  | { tiles: null; error: string }
+
 export async function generateDashboardLayout(
   columns: ColumnInfo[],
   rows: string[][]
-): Promise<LayoutItem[] | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null
+): Promise<GenerateResult> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { tiles: null, error: "AI generation is not configured — ANTHROPIC_API_KEY is missing." }
+  }
 
-  const client    = new Anthropic()
-  const sample    = rows.slice(0, 20)
-  const colSchema = columns.map(c => `${c.name} (${c.type})`).join(", ")
-  const sampleStr = sample.map(r => r.join("\t")).join("\n")
-  const colList   = columns.map(c => `"${c.name}"`).join(", ")
-  const numCols   = columns.filter(c => c.type === "number").map(c => c.name).join(", ")   || "none"
-  const dateCols  = columns.filter(c => c.type === "date").map(c => c.name).join(", ")     || "none"
-  const catCols   = columns.filter(c => c.type === "category").map(c => c.name).join(", ") || "none"
-
+  const client      = new Anthropic()
+  const colList     = columns.map(c => `"${c.name}"`).join(", ")
+  const colSummary  = summarizeColumns(columns, rows)
+  const sample      = rows.slice(0, 12)
+  const header      = columns.map(c => c.name).join("\t")
+  const sampleStr   = [header, ...sample.map(r => r.join("\t"))].join("\n")
   const dateCol     = columns.find(c => c.type === "date")
   const granularity = dateCol ? detectGranularity(rows, dateCol) : null
-  const trendPeriod = granularity === "daily"   ? "previous day"
-                    : granularity === "weekly"  ? "last week"
-                    : granularity === "monthly" ? "last month"
-                    : granularity === "yearly"  ? "last year"
-                    : null
 
-  const prompt = `You are a BI dashboard layout generator. Return a JSON array of tiles for visualising this dataset.
+  const prompt = `Here is a dataset. Study it carefully, then design a custom dashboard that best communicates what this data is about.
 
-COLUMNS: ${colSchema}
-SAMPLE DATA (tab-separated):
+COLUMN STATISTICS (${rows.length} total rows):
+${colSummary}
+
+SAMPLE ROWS (tab-separated):
 ${sampleStr}
-${granularity ? `\nDATA GRANULARITY: ${granularity} (detected from date values). Use this when writing chart titles — e.g. "Daily Revenue", "Weekly Orders", etc.` : ""}
+${granularity ? `\nDATE GRANULARITY: ${granularity} — use in chart titles (e.g. "Monthly Revenue", "Weekly Orders")` : ""}
 
-CANVAS: ${CANVAS_UNITS} units wide. 1 unit = 24px.
-All x, y, w, h values must be positive integers (units).
+---
 
-CONSTRAINTS:
-- x ≥ 1, y ≥ 1 (left/top margin)
-- x + w ≤ 47 (right boundary — last tile in each row should reach 47)
-- Leave at least 1 unit gap between every pair of tiles
-- Minimum w=4, h=4. Maximum 8 tiles.
+CANVAS: ${CANVAS_UNITS} units wide. 1 unit = 24px. Coordinates start at (1,1).
 
-RECOMMENDED SIZES:
-- Stat card: w=10–11, h=7
-- Line/area/bar chart: h=13, w=14–34
-- Pie chart: h=13, w=12–16
+HARD CONSTRAINTS:
+- x ≥ 1, y ≥ 1
+- x + w ≤ ${CANVAS_UNITS - 1} (last tile per row should reach ~${CANVAS_UNITS - 1})
+- At least 1 unit gap between every pair of tiles
+- Minimum w=4, h=4
 
-EXAMPLE LAYOUT:
-Row 1 y=1 h=7:  stat(x=1,w=11), stat(x=13,w=11), stat(x=25,w=11), stat(x=37,w=10)
-Row 2 y=9 h=13: line(x=1,w=32), pie(x=34,w=13)
-Row 3 y=23 h=13: bar(x=1,w=22), hbar(x=24,w=23)
+RECOMMENDED SIZES (these are starting points, not rules — adapt to the data):
+- Stat card: w=10–14, h=7 (never less than h=7)
+- Line / area chart: w=28–48, h=12–15 (wide and relatively shallow — trends read better stretched horizontally)
+- Bar chart (vertical): w=18–30, h=14–18 (taller than wide — bars need vertical room)
+- Bar chart (horizontal): w=30–46, h=13–17 (wider, since labels are on the left)
+- Pie chart: w=14–20, h=13–16 (roughly square — circular charts look wrong if too rectangular)
+- Table: w=44–64, h=13–17
 
-CHART TYPE RULES:
-- "line" or "area": xCol must be a date column [${dateCols}]. Add "smooth":true for line.
-- "bar": xCol is a category column [${catCols}]. Add "orientation":"horizontal" for many categories.
-- "pie": xCol is a category with ≤6 values. Add "showCenter":true, "showLegend":true.
-- "stat": column must be a number column [${numCols}]. Use "sum" for totals, "avg" for rates/margins.
-${trendPeriod ? `- Stat card labels should reflect the data granularity, e.g. "Total Revenue (${granularity})" if relevant.` : ""}
+TILE SCHEMAS:
 
-TILE SCHEMA:
-Stat:  { "id":"s1", "type":"stat",  "x":1,"y":1,"w":11,"h":7,  "stat":  { "column":"Revenue","agg":"sum","label":"Total Revenue" } }
-Chart: { "id":"c1", "type":"chart", "x":1,"y":9,"w":32,"h":13, "chart": { "type":"line","xCol":"Date","yCol":"Revenue","agg":"sum","title":"Revenue Over Time","smooth":true } }
+Stat:  { "id":"s1", "type":"stat", "x":1,"y":1,"w":11,"h":7, "stat":{ "column":"Revenue","agg":"sum","label":"Total Revenue" } }
+  agg: "sum" | "avg" | "count" | "min" | "max"
+  column must be numeric
+
+Chart: { "id":"c1", "type":"chart", "x":1,"y":9,"w":32,"h":13, "chart":{ "type":"line","xCol":"Date","yCol":"Revenue","agg":"sum","title":"Revenue Over Time" } }
+  chart.type options and when to use each:
+
+  "line" — trends over time; xCol must be a date column
+    "smooth": true → curved lines (better for continuous trends like revenue or temperature)
+    "smooth": false → angular/stepped (better for discrete counts or volatile data)
+    "showLabels": true → show value at each point (use when the dataset has few points and exact values matter)
+    "yCol2": "<column>" → second line on same axis (use to compare two related metrics over time, e.g. Revenue vs. Target, New Users vs. Churned)
+    "showLegend": true → required when using yCol2 so the viewer knows which line is which
+
+  "area" — filled trends; xCol must be a date column; more visual weight than line, good for volume/accumulation
+    "smooth": true → curved fill
+    "yCol2": "<column>" → second filled area
+    "stacked": true → stack yCol2 on top of yCol (use when both series are components of the same total, e.g. Mobile + Desktop traffic)
+    "showLegend": true → required when using yCol2
+
+  "bar" — comparisons across categories; xCol is a category column
+    "orientation": "horizontal" → better when category names are long or there are many categories (>5)
+    "orientation": "vertical" → default; better for few categories with short names
+
+  "pie" — part-of-whole composition; xCol must be a low-cardinality category (≤6 values); only use when proportions genuinely matter
+    "showCenter": true → donut style with total in center
+    "showLegend": true → color legend (always add for pie)
+
+  agg applies to yCol (and yCol2 if present): "sum" | "avg" | "count" | "min" | "max"
+
+Table: { "id":"t1", "type":"table", "x":1,"y":37,"w":46,"h":13, "table":{ "title":"Orders","cols":["Date","Product","Revenue"] } }
+  cols must be exact column names from the dataset; choose the most informative subset
 
 Available columns: ${colList}
 
-Return ONLY the JSON array, no other text.`
+---
+
+Respond in this exact format — no other text:
+
+<analysis>
+What domain/business is this data from? What are the 2-3 most important things a viewer needs to understand? Why did you choose this specific set of tiles?
+</analysis>
+<layout>
+[JSON array of tiles]
+</layout>`
 
   try {
     const msg = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      system: "You are a senior data analyst and dashboard designer. You create bespoke dashboards that reveal the story hidden in each unique dataset. You never follow a template — every dashboard you design is tailored to what the specific data is actually about and what a viewer needs to understand at a glance.",
       messages: [{ role: "user", content: prompt }],
     })
 
-    const text  = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : ""
-    const match = text.match(/\[[\s\S]*\]/)
-    if (!match) return null
+    const text = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : ""
 
-    const raw = JSON.parse(match[0]) as LayoutItem[]
-    if (!Array.isArray(raw) || !raw.length) return null
+    const layoutMatch = text.match(/<layout>([\s\S]*?)<\/layout>/)
+    if (!layoutMatch) return { tiles: null, error: "AI returned an unreadable response. Please try again." }
+
+    const raw = JSON.parse(layoutMatch[1]!.trim()) as LayoutItem[]
+    if (!Array.isArray(raw) || !raw.length) return { tiles: null, error: "AI returned an empty layout. Please try again." }
 
     const scaled = rightAlignRows(
       raw.map(t => ({ ...t, x: t.x * S, y: t.y * S, w: t.w * S, h: t.h * S }))
@@ -247,11 +310,11 @@ Return ONLY the JSON array, no other text.`
 
     if (!validateLayout(scaled, columns)) {
       console.warn("AI returned invalid layout — falling back to empty canvas")
-      return null
+      return { tiles: null, error: "AI returned an invalid layout. Please try again." }
     }
 
     const g = granularity ?? "monthly"
-    return scaled.map(t => {
+    const tiles = scaled.map(t => {
       if (t.type === "stat" && t.stat) {
         const value     = computeStatValue(t.stat.column, t.stat.agg, columns, rows)
         const trendData = computeStatTrend(t.stat.column, t.stat.agg, columns, rows, g)
@@ -259,8 +322,9 @@ Return ONLY the JSON array, no other text.`
       }
       return t
     })
+    return { tiles, error: null }
   } catch (e) {
     console.error("Dashboard generation failed:", e)
-    return null
+    return { tiles: null, error: "Dashboard generation failed. Please try again." }
   }
 }

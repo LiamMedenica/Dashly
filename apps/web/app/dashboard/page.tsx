@@ -17,6 +17,7 @@ export default async function Page({
   let columns: ColumnInfo[] = []
   let rows: string[][] = []
   let initialLayout: LayoutItem[] | undefined
+  let generationError: string | undefined
   const dashboardName = name || (isDemo ? "Sample E-Commerce Dashboard" : "My Dashboard")
 
   if (!isDemo && url) {
@@ -32,7 +33,12 @@ export default async function Page({
     }
 
     if (generate === "true" && columns.length > 0) {
-      initialLayout = await generateDashboardLayout(columns, rows) ?? undefined
+      const result = await generateDashboardLayout(columns, rows)
+      if (result.tiles) {
+        initialLayout = result.tiles
+      } else {
+        generationError = result.error
+      }
     }
   }
 
@@ -53,6 +59,7 @@ export default async function Page({
         rows={rows}
         isDemo={isDemo}
         initialLayout={initialLayout}
+        generationError={generationError}
       />
     </SidebarProvider>
   )

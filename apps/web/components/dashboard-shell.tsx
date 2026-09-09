@@ -16,6 +16,7 @@ export function DashboardShell({
   rows,
   isDemo,
   initialLayout,
+  generationError,
 }: {
   dashboardName: string
   sheetUrl?: string
@@ -23,6 +24,7 @@ export function DashboardShell({
   rows: string[][]
   isDemo?: boolean
   initialLayout?: LayoutItem[]
+  generationError?: string
 }) {
   const [paletteId, setPaletteId] = useState(DEFAULT_PALETTE_ID)
   const [customColor, setCustomColor] = useState("#6366f1")
@@ -46,8 +48,10 @@ export function DashboardShell({
           rows={effectiveRows}
           paletteId={paletteId}
           customColor={customColor}
+          sheetUrl={isDemo ? undefined : sheetUrl}
           initialLayout={isDemo ? undefined : initialLayout}
           initialLayoutFn={isDemo ? buildDemoLayout : undefined}
+          generationError={isDemo ? undefined : generationError}
         />
       </div>
     </SidebarInset>

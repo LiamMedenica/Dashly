@@ -29,16 +29,20 @@ import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/nativ
 import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
+import { toast } from "sonner"
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
-const SNAP  = 24
+const SNAP      = 24
+const LOGICAL_W = SNAP * 67  // 1608 — fixed logical canvas width
 const MIN_W = SNAP * 4
 const MIN_H = SNAP * 3
 const GHOST_W       = 11 * SNAP
 const GHOST_H       =  7 * SNAP
 const CHART_GHOST_W = 20 * SNAP
 const CHART_GHOST_H = 14 * SNAP
+const MIN_SCALE = 0.1
+const MAX_SCALE = 3
 
 const PaletteContext = createContext<ColorPalette>(COLOR_PALETTES[0]!)
 
@@ -339,9 +343,10 @@ let cancelActiveDrag: (() => void) | null = null
 
 const HANDLE = 6
 
-function ResizeHandles({ item, canvasW, onUpdate, onResizeStart, onResizeEnd }: {
+function ResizeHandles({ item, canvasW, scaleRef, onUpdate, onResizeStart, onResizeEnd }: {
   item: LayoutItem
   canvasW: number
+  scaleRef: React.MutableRefObject<number>
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
   onResizeStart?: () => void
   onResizeEnd?: () => void
@@ -351,7 +356,7 @@ function ResizeHandles({ item, canvasW, onUpdate, onResizeStart, onResizeEnd }: 
       e.stopPropagation(); e.preventDefault()
       const sx = e.clientX, sy = e.clientY
       onResizeStart?.()
-      function onMove(ev: MouseEvent) { onUpdate(item.id, getMove(ev.clientX - sx, ev.clientY - sy)) }
+      function onMove(ev: MouseEvent) { onUpdate(item.id, getMove((ev.clientX - sx) / scaleRef.current, (ev.clientY - sy) / scaleRef.current)) }
       function onUp() {
         document.removeEventListener("mousemove", onMove)
         document.removeEventListener("mouseup",   onUp)
@@ -886,9 +891,10 @@ function TableCard({ item, columns, rows }: {
 
 // ─── GridItem ─────────────────────────────────────────────────────────────────
 
-function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onEdit, onDuplicate, onDelete, children }: {
+function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onEdit, onDuplicate, onDelete, children }: {
   item: LayoutItem
   canvasW: number
+  scaleRef: React.MutableRefObject<number>
   isSelected: boolean
   onSelect: () => void
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
@@ -921,7 +927,7 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
       const dx = ev.clientX - sx, dy = ev.clientY - sy
       if (!moved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) { moved = true; onDragStart(); onSelect() }
       if (!moved) return
-      const rx = bx + dx, ry = by + dy
+      const rx = bx + dx / scaleRef.current, ry = by + dy / scaleRef.current
       setLive({ x: rubberBand(rx, minX, maxX), y: ry < minY ? minY - (minY - ry) * 0.25 : ry })
       snapX = clamp(snapTo(rx), minX, maxX)
       snapY = Math.max(minY, snapTo(ry))
@@ -970,6 +976,7 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
           <ResizeHandles
             item={item}
             canvasW={canvasW}
+            scaleRef={scaleRef}
             onUpdate={onUpdate}
             onResizeStart={() => setIsResizing(true)}
             onResizeEnd={() => setIsResizing(false)}
@@ -1013,19 +1020,25 @@ function GridItem({ item, canvasW, isSelected, onSelect, onUpdate, onDragStart, 
 
 // ─── DashboardGrid ────────────────────────────────────────────────────────────
 
-export function DashboardGrid({ columns = [], rows = [], paletteId, customColor, initialLayout, initialLayoutFn }: {
+export function DashboardGrid({ columns = [], rows = [], paletteId, customColor, sheetUrl, initialLayout, initialLayoutFn, generationError }: {
   columns?: ColumnInfo[]
   rows?: string[][]
   paletteId?: string
   customColor?: string
+  sheetUrl?: string
   initialLayout?: LayoutItem[]
   initialLayoutFn?: (canvasW: number) => LayoutItem[]
+  generationError?: string
 }) {
   const palette = paletteId === "custom" && customColor
     ? buildCustomPalette(customColor)
     : COLOR_PALETTES.find(p => p.id === paletteId) ?? COLOR_PALETTES[0]!
   const canvasRef = useRef<HTMLDivElement>(null)
-  const [canvasW,  setCanvasW]  = useState(0)
+  const outerRef    = useRef<HTMLDivElement>(null)
+  const canvasW     = LOGICAL_W
+  const viewportRef = useRef({ panX: 0, panY: 0, scale: 1 })
+  const scaleRef    = useRef(1)
+  const zoomLabelRef = useRef<HTMLSpanElement>(null)
   const [layout,   setLayout]   = useState<LayoutItem[]>(initialLayout ?? [])
   const [dragging, setDragging] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -1037,26 +1050,137 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   rowsRef.current    = rows
   layoutRef.current  = layout
 
-  useIsomorphicLayoutEffect(() => {
-    const el = canvasRef.current
-    if (!el) return
-    const w = el.clientWidth - SNAP
-    setCanvasW(w)
-    if (initialLayoutFn) setLayout(initialLayoutFn(w))
-    else if (!initialLayout) setLayout(buildLayout(w))
-
-    let timer: ReturnType<typeof setTimeout>
-    const ro = new ResizeObserver(() => {
-      clearTimeout(timer)
-      timer = setTimeout(() => {
-        const newW = el.clientWidth - SNAP
-        setCanvasW(newW)
-        if (initialLayoutFn) setLayout(initialLayoutFn(newW))
-      }, 150)
-    })
-    ro.observe(el)
-    return () => { ro.disconnect(); clearTimeout(timer) }
+  const applyTransform = useCallback(() => {
+    const { panX, panY, scale } = viewportRef.current
+    if (canvasRef.current) {
+      canvasRef.current.style.transform = `translate3d(${panX}px,${panY}px,0) scale(${scale})`
+    }
+    scaleRef.current = scale
+    if (zoomLabelRef.current) {
+      zoomLabelRef.current.textContent = `${Math.round(scale * 100)}%`
+    }
   }, [])
+
+  const fitToWindow = useCallback(() => {
+    const outer = outerRef.current
+    if (!outer) return
+    const s = Math.min(outer.clientWidth / LOGICAL_W, 1)
+    const panX = Math.max(0, (outer.clientWidth - LOGICAL_W * s) / 2)
+    viewportRef.current = { panX, panY: 0, scale: s }
+    applyTransform()
+  }, [applyTransform])
+
+  const doZoom = useCallback((factor: number) => {
+    const outer = outerRef.current
+    if (!outer) return
+    const { panX, panY, scale } = viewportRef.current
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor))
+    const cx = outer.clientWidth / 2, cy = outer.clientHeight / 2
+    viewportRef.current = {
+      panX: cx - (cx - panX) * (newScale / scale),
+      panY: cy - (cy - panY) * (newScale / scale),
+      scale: newScale,
+    }
+    applyTransform()
+  }, [applyTransform])
+
+  const onCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    setSelectedId(null)
+    const outer = outerRef.current
+    const sx = e.clientX, sy = e.clientY
+    const { panX: startX, panY: startY } = viewportRef.current
+    let panning = false
+
+    function onMove(ev: MouseEvent) {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy
+      if (!panning && Math.hypot(dx, dy) > 4) {
+        panning = true
+        if (outer) outer.style.cursor = 'grabbing'
+      }
+      if (!panning) return
+      viewportRef.current = { ...viewportRef.current, panX: startX + dx, panY: startY + dy }
+      applyTransform()
+    }
+
+    function onUp() {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (outer) outer.style.cursor = ''
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [applyTransform])
+
+  useIsomorphicLayoutEffect(() => {
+    const outer = outerRef.current
+    if (!outer) return
+
+    // Initial layout
+    if (initialLayoutFn) setLayout(initialLayoutFn(canvasW))
+    else if (!initialLayout) setLayout(buildLayout(canvasW))
+
+    // Fit to width on mount, centered horizontally
+    const s = Math.min(outer.clientWidth / LOGICAL_W, 1)
+    const panX = Math.max(0, (outer.clientWidth - LOGICAL_W * s) / 2)
+    viewportRef.current = { panX, panY: 0, scale: s }
+    applyTransform()
+
+    // Zoom with scroll wheel — applied directly to DOM, no React state
+    function onWheel(e: WheelEvent) {
+      e.preventDefault()
+      const { panX, panY, scale } = viewportRef.current
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor))
+      const rect = outer.getBoundingClientRect()
+      const cx = e.clientX - rect.left
+      const cy = e.clientY - rect.top
+      viewportRef.current = {
+        panX: cx - (cx - panX) * (newScale / scale),
+        panY: cy - (cy - panY) * (newScale / scale),
+        scale: newScale,
+      }
+      applyTransform()
+    }
+    outer.addEventListener('wheel', onWheel, { passive: false })
+    return () => outer.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // ── localStorage: restore or save draft ──
+  const DRAFT_KEY = sheetUrl ? `dashly_draft_${sheetUrl}` : null
+
+  useEffect(() => {
+    if (!DRAFT_KEY) return
+    if (initialLayout?.length) {
+      // Fresh AI generation — persist it and strip ?generate from the URL
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(initialLayout))
+      const u = new URL(window.location.href)
+      if (u.searchParams.has("generate")) {
+        u.searchParams.delete("generate")
+        window.history.replaceState({}, "", u.toString())
+      }
+      return
+    }
+    // No server-provided layout — try to restore a saved draft
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved) as LayoutItem[]
+        if (Array.isArray(parsed) && parsed.length > 0) setLayout(parsed)
+      }
+    } catch {}
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!DRAFT_KEY || layout.length === 0) return
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(layout))
+  }, [layout, DRAFT_KEY])
+
+  // ── generation error toast ──
+  useEffect(() => {
+    if (generationError) toast.error(generationError)
+  }, [generationError])
 
   // ── collision-aware move ──
   const onUpdate = useCallback((id: string, patch: Partial<LayoutItem>) =>
@@ -1167,13 +1291,16 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setDragging(true)
 
       const onMove = (e: MouseEvent) => {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || e.clientX < outerRect.left || e.clientX > outerRect.right || e.clientY < outerRect.top || e.clientY > outerRect.bottom) {
           setDropGhost(null); return
         }
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) { setDropGhost(null); return }
+        const s = scaleRef.current
         setDropGhost({
-          x: clamp(e.clientX - rect.left - GHOST_W / 2, SNAP, canvasRef.current!.clientWidth - SNAP - GHOST_W - SNAP),
-          y: Math.max(SNAP, e.clientY - rect.top - GHOST_H / 2),
+          x: clamp((e.clientX - rect.left) / s - GHOST_W / 2, SNAP, canvasW - GHOST_W - SNAP),
+          y: Math.max(SNAP, (e.clientY - rect.top) / s - GHOST_H / 2),
           w: GHOST_W, h: GHOST_H,
         })
       }
@@ -1183,10 +1310,13 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         document.removeEventListener("mouseup",   onUp)
         setDragging(false)
         setDropGhost(null)
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || e.clientX < outerRect.left || e.clientX > outerRect.right || e.clientY < outerRect.top || e.clientY > outerRect.bottom) return
         const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return
-        const tx = clamp(snapTo(e.clientX - rect.left - GHOST_W / 2), SNAP, canvasRef.current!.clientWidth - SNAP - GHOST_W - SNAP)
-        const ty = Math.max(SNAP, snapTo(e.clientY - rect.top - GHOST_H / 2))
+        if (!rect) return
+        const s = scaleRef.current
+        const tx = clamp(snapTo((e.clientX - rect.left) / s - GHOST_W / 2), SNAP, canvasW - GHOST_W - SNAP)
+        const ty = Math.max(SNAP, snapTo((e.clientY - rect.top) / s - GHOST_H / 2))
         const numCols = columnsRef.current.filter(c => c.type === "number")
         setPendingPos({ x: tx, y: ty })
         setConfigCol(numCols[0]?.name ?? "")
@@ -1212,13 +1342,16 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setDragging(true)
 
       const onMove = (ev: MouseEvent) => {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) {
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) {
           setDropGhost(null); return
         }
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) { setDropGhost(null); return }
+        const s = scaleRef.current
         setDropGhost({
-          x: clamp(ev.clientX - rect.left - CHART_GHOST_W / 2, SNAP, canvasRef.current!.clientWidth - SNAP - CHART_GHOST_W - SNAP),
-          y: Math.max(SNAP, ev.clientY - rect.top - CHART_GHOST_H / 2),
+          x: clamp((ev.clientX - rect.left) / s - CHART_GHOST_W / 2, SNAP, canvasW - CHART_GHOST_W - SNAP),
+          y: Math.max(SNAP, (ev.clientY - rect.top) / s - CHART_GHOST_H / 2),
           w: CHART_GHOST_W, h: CHART_GHOST_H,
         })
       }
@@ -1228,10 +1361,13 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         document.removeEventListener("mouseup",   onUp)
         setDragging(false)
         setDropGhost(null)
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) return
         const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) return
-        const tx = clamp(snapTo(ev.clientX - rect.left - CHART_GHOST_W / 2), SNAP, canvasRef.current!.clientWidth - SNAP - CHART_GHOST_W - SNAP)
-        const ty = Math.max(SNAP, snapTo(ev.clientY - rect.top - CHART_GHOST_H / 2))
+        if (!rect) return
+        const s = scaleRef.current
+        const tx = clamp(snapTo((ev.clientX - rect.left) / s - CHART_GHOST_W / 2), SNAP, canvasW - CHART_GHOST_W - SNAP)
+        const ty = Math.max(SNAP, snapTo((ev.clientY - rect.top) / s - CHART_GHOST_H / 2))
         const cols = columnsRef.current
         const catCol = cols.find(c => c.type === "category" || c.type === "text")
         const numCol = cols.find(c => c.type === "number")
@@ -1264,13 +1400,16 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setDragging(true)
 
       const onMove = (ev: MouseEvent) => {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) {
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) {
           setDropGhost(null); return
         }
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) { setDropGhost(null); return }
+        const s = scaleRef.current
         setDropGhost({
-          x: clamp(ev.clientX - rect.left - CHART_GHOST_W / 2, SNAP, canvasRef.current!.clientWidth - SNAP - CHART_GHOST_W - SNAP),
-          y: Math.max(SNAP, ev.clientY - rect.top - CHART_GHOST_H / 2),
+          x: clamp((ev.clientX - rect.left) / s - CHART_GHOST_W / 2, SNAP, canvasW - CHART_GHOST_W - SNAP),
+          y: Math.max(SNAP, (ev.clientY - rect.top) / s - CHART_GHOST_H / 2),
           w: CHART_GHOST_W, h: CHART_GHOST_H,
         })
       }
@@ -1280,10 +1419,13 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         document.removeEventListener("mouseup",   onUp)
         setDragging(false)
         setDropGhost(null)
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) return
         const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect || ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) return
-        const tx = clamp(snapTo(ev.clientX - rect.left - CHART_GHOST_W / 2), SNAP, canvasRef.current!.clientWidth - SNAP - CHART_GHOST_W - SNAP)
-        const ty = Math.max(SNAP, snapTo(ev.clientY - rect.top - CHART_GHOST_H / 2))
+        if (!rect) return
+        const s = scaleRef.current
+        const tx = clamp(snapTo((ev.clientX - rect.left) / s - CHART_GHOST_W / 2), SNAP, canvasW - CHART_GHOST_W - SNAP)
+        const ty = Math.max(SNAP, snapTo((ev.clientY - rect.top) / s - CHART_GHOST_H / 2))
         const allCols = columnsRef.current.map(c => c.name)
         setPendingTablePos({ x: tx, y: ty })
         setTableConfigTitle("")
@@ -1314,7 +1456,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       const item = prev.find(it => it.id === id)
       if (!item) return prev
       const newId = `${item.type}-${Date.now()}`
-      const cw = canvasRef.current!.clientWidth - SNAP
+      const cw = canvasW
       const withNew = [...prev, { ...item, id: newId }]
       const pos = resolveCollision(newId, item.x, item.y, item.w, item.h, withNew, cw, true)
         ?? { x: item.x, y: item.y + item.h + SNAP }
@@ -1391,7 +1533,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       const { x, y } = pendingPos
       const id = `stat-${Date.now()}`
       setLayout(prev => {
-        const cw = canvasRef.current!.clientWidth - SNAP
+        const cw = canvasW
         const withNew: LayoutItem[] = [...prev, { id, x, y, w: GHOST_W, h: GHOST_H, type: "stat", stat }]
         const pos = resolveCollision(id, x, y, GHOST_W, GHOST_H, withNew, cw, true) ?? { x, y }
         return [...prev, { id, x: pos.x, y: pos.y, w: GHOST_W, h: GHOST_H, type: "stat", stat }]
@@ -1437,7 +1579,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       const { x, y } = pendingChartPos
       const id = `chart-${Date.now()}`
       setLayout(prev => {
-        const cw = canvasRef.current!.clientWidth - SNAP
+        const cw = canvasW
         const withNew: LayoutItem[] = [...prev, { id, x, y, w: CHART_GHOST_W, h: CHART_GHOST_H, type: "chart", chart }]
         const pos = resolveCollision(id, x, y, CHART_GHOST_W, CHART_GHOST_H, withNew, cw, true) ?? { x, y }
         return [...prev, { id, x: pos.x, y: pos.y, w: CHART_GHOST_W, h: CHART_GHOST_H, type: "chart", chart }]
@@ -1464,7 +1606,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       const { x, y } = pendingTablePos
       const id = `table-${Date.now()}`
       setLayout(prev => {
-        const cw = canvasRef.current!.clientWidth - SNAP
+        const cw = canvasW
         const withNew: LayoutItem[] = [...prev, { id, x, y, w: CHART_GHOST_W, h: CHART_GHOST_H, type: "table", table }]
         const pos = resolveCollision(id, x, y, CHART_GHOST_W, CHART_GHOST_H, withNew, cw, true) ?? { x, y }
         return [...prev, { id, x: pos.x, y: pos.y, w: CHART_GHOST_W, h: CHART_GHOST_H, type: "table", table }]
@@ -1881,54 +2023,70 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         </DialogContent>
       </Dialog>
 
-      {/* ── canvas ── */}
-      <div
-        ref={canvasRef}
-        className="flex-1 relative overflow-x-hidden"
-        data-dashboard-canvas
-        style={{ minHeight: canvasMinH }}
-        onMouseDown={() => setSelectedId(null)}
-      >
-        {dragging && <div className="fixed inset-0 z-40 cursor-grabbing" />}
-        <div className={`dot-grid pointer-events-none absolute inset-0 transition-opacity duration-500 ${dragging ? "opacity-100" : "opacity-0"}`} />
-        {dropGhost && (
-          <div aria-hidden className="pointer-events-none absolute rounded-xl border border-dashed border-muted-foreground/25 bg-muted/15"
-            style={{ left: dropGhost.x, top: dropGhost.y, width: dropGhost.w, height: dropGhost.h }} />
-        )}
+      {/* ── canvas viewport ── */}
+      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-muted/60" style={{ cursor: 'grab' }}>
+        <div
+          ref={canvasRef}
+          data-dashboard-canvas
+          className="absolute top-0 left-0 bg-background shadow-md rounded-xl overflow-hidden"
+          style={{ width: LOGICAL_W, height: canvasMinH, transformOrigin: '0 0', willChange: 'transform' }}
+          onMouseDown={onCanvasMouseDown}
+        >
+          {dragging && <div className="fixed inset-0 z-40 cursor-grabbing" />}
+          <div className={`dot-grid pointer-events-none absolute inset-0 transition-opacity duration-500 ${dragging ? "opacity-100" : "opacity-[0.08]"}`} />
+          {dropGhost && (
+            <div aria-hidden className="pointer-events-none absolute rounded-xl border border-dashed border-muted-foreground/25 bg-muted/15"
+              style={{ left: dropGhost.x, top: dropGhost.y, width: dropGhost.w, height: dropGhost.h }} />
+          )}
 
-        {layout.map(item => (
-          <GridItem
-            key={item.id} item={item} canvasW={canvasW}
-            isSelected={selectedId === item.id}
-            onSelect={() => setSelectedId(item.id)}
-            onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd}
-            onEdit={() => handleEdit(item.id)}
-            onDuplicate={() => { handleDuplicate(item.id); setSelectedId(null) }}
-            onDelete={() => { handleDelete(item.id); setSelectedId(null) }}
-          >
-            {item.type === "table"
-              ? <TableCard item={item} columns={columns} rows={rows} />
-              : item.type === "stat"
-              ? <StatCard item={item} />
-              : item.chart?.type === "line"
-                ? <LineCard item={item} columns={columns} rows={rows} />
-                : item.chart?.type === "area"
-                ? <AreaCard item={item} columns={columns} rows={rows} />
-                : item.chart?.type === "pie"
-                ? <PieCard item={item} columns={columns} rows={rows} />
-                : <ChartCard
-                    item={item}
-                    columns={columns}
-                    rows={rows}
-                    onToggleOrientation={() => setLayout(prev => prev.map(it =>
-                      it.id === item.id && it.chart
-                        ? { ...it, chart: { ...it.chart, orientation: it.chart.orientation === "horizontal" ? "vertical" : "horizontal" } }
-                        : it
-                    ))}
-                  />}
-          </GridItem>
-        ))}
-      </div>
+          {layout.map(item => (
+            <GridItem
+              key={item.id} item={item} canvasW={canvasW} scaleRef={scaleRef}
+              isSelected={selectedId === item.id}
+              onSelect={() => setSelectedId(item.id)}
+              onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd}
+              onEdit={() => handleEdit(item.id)}
+              onDuplicate={() => { handleDuplicate(item.id); setSelectedId(null) }}
+              onDelete={() => { handleDelete(item.id); setSelectedId(null) }}
+            >
+              {item.type === "table"
+                ? <TableCard item={item} columns={columns} rows={rows} />
+                : item.type === "stat"
+                ? <StatCard item={item} />
+                : item.chart?.type === "line"
+                  ? <LineCard item={item} columns={columns} rows={rows} />
+                  : item.chart?.type === "area"
+                  ? <AreaCard item={item} columns={columns} rows={rows} />
+                  : item.chart?.type === "pie"
+                  ? <PieCard item={item} columns={columns} rows={rows} />
+                  : <ChartCard
+                      item={item}
+                      columns={columns}
+                      rows={rows}
+                      onToggleOrientation={() => setLayout(prev => prev.map(it =>
+                        it.id === item.id && it.chart
+                          ? { ...it, chart: { ...it.chart, orientation: it.chart.orientation === "horizontal" ? "vertical" : "horizontal" } }
+                          : it
+                      ))}
+                    />}
+            </GridItem>
+          ))}
+        </div>{/* canvas */}
+
+        {/* zoom controls */}
+        <div className="absolute bottom-4 right-4 z-50 flex items-center gap-1.5 bg-background/90 backdrop-blur-sm border border-border rounded-lg shadow-md px-2 py-1">
+          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => doZoom(0.8)}>
+            <span className="text-sm leading-none">−</span>
+          </Button>
+          <span ref={zoomLabelRef} className="text-xs tabular-nums w-10 text-center text-muted-foreground select-none">100%</span>
+          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => doZoom(1.25)}>
+            <span className="text-sm leading-none">+</span>
+          </Button>
+          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={fitToWindow} title="Fit to window">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-muted-foreground"><rect x="1" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/></svg>
+          </Button>
+        </div>
+      </div>{/* outer viewport */}
 
       {showDatePicker && datePickerPos && createPortal(
         <>
