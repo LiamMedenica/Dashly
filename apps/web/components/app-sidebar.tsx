@@ -46,6 +46,7 @@ import {
   Settings2Icon,
   CircleHelpIcon,
   TableIcon,
+  TypeIcon,
 } from "lucide-react"
 import { type ColumnInfo } from "@/lib/analyze"
 import {
@@ -127,6 +128,13 @@ function ChartPreview({ title }: { title: string }) {
     </div>
   )
 
+  if (title === "Text Box") return (
+    <div className="h-14 flex flex-col justify-center gap-1 overflow-hidden px-0.5">
+      <p className="text-xs font-semibold leading-tight text-foreground">Dashboard Title</p>
+      <p className="text-[9px] text-muted-foreground leading-snug">Add context, annotations, or section headers with rich text formatting.</p>
+    </div>
+  )
+
   return (
     <div className="text-primary">
       <LineChart width={152} height={56} data={PREVIEW_DATA} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
@@ -183,6 +191,12 @@ const CHART_TYPES = [
     icon: <TableIcon className="size-3.5 shrink-0" />,
     description: "Browse your raw data in a structured grid.",
     onDrag: () => window.dispatchEvent(new Event("sidebar-drag-table")),
+  },
+  {
+    title: "Text Box",
+    icon: <TypeIcon className="size-3.5 shrink-0" />,
+    description: "Add headings, annotations, or notes with rich text formatting.",
+    onDrag: () => window.dispatchEvent(new Event("sidebar-drag-text")),
   },
 ]
 

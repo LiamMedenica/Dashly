@@ -26,10 +26,15 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Calendar } from "@workspace/ui/components/calendar"
 import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/native-select"
-import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon } from "lucide-react"
+import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon, BoldIcon, ItalicIcon, UnderlineIcon as UnderlineIconLucide, ListIcon, ListOrderedIcon, Heading1Icon, Heading2Icon, TypeIcon, AlignLeftIcon, AlignCenterIcon, AlignRightIcon, XIcon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
 import { toast } from "sonner"
+import { useEditor, EditorContent, useEditorState } from "@tiptap/react"
+import StarterKit from "@tiptap/starter-kit"
+import TiptapUnderline from "@tiptap/extension-underline"
+import TextAlign from "@tiptap/extension-text-align"
+import Placeholder from "@tiptap/extension-placeholder"
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -41,6 +46,8 @@ const GHOST_W       = 11 * SNAP
 const GHOST_H       =  7 * SNAP
 const CHART_GHOST_W = 20 * SNAP
 const CHART_GHOST_H = 14 * SNAP
+const TEXT_GHOST_W  = 20 * SNAP
+const TEXT_GHOST_H  =  5 * SNAP
 const MIN_SCALE = 0.1
 const MAX_SCALE = 3
 
@@ -281,12 +288,16 @@ export type TableConfig = {
   filterTo?: string
   filterLabel?: string
 }
+export type TextConfig = {
+  content: string
+}
 export type LayoutItem = {
   id: string; x: number; y: number; w: number; h: number
-  type: "stat" | "chart" | "table"
+  type: "stat" | "chart" | "table" | "text"
   stat?: StatConfig
   chart?: ChartConfig
   table?: TableConfig
+  text?: TextConfig
 }
 
 // ─── layout ──────────────────────────────────────────────────────────────────
@@ -524,6 +535,164 @@ function ResizeHandles({ item, canvasW, viewportRef, onUpdate, onResizeStart, on
   )
 }
 
+// ─── TextCard + TextEditDialog ────────────────────────────────────────────────
+
+const TEXT_EDITOR_STYLES = `
+  .dashly-text-editor .ProseMirror .is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: oklch(0.55 0 0 / 0.4);
+    float: left; height: 0; pointer-events: none;
+  }
+  .dashly-text-editor .ProseMirror { outline: none; cursor: text; }
+  .dashly-text-editor .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.35rem; line-height: 1.25; }
+  .dashly-text-editor .ProseMirror h2 { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.3rem; line-height: 1.3; }
+  .dashly-text-editor .ProseMirror p { margin-bottom: 0.3rem; line-height: 1.6; }
+  .dashly-text-editor .ProseMirror p:last-child { margin-bottom: 0; }
+  .dashly-text-editor .ProseMirror ul { list-style: disc; padding-left: 1.2rem; margin-bottom: 0.3rem; }
+  .dashly-text-editor .ProseMirror ol { list-style: decimal; padding-left: 1.2rem; margin-bottom: 0.3rem; }
+  .dashly-text-editor .ProseMirror li { margin-bottom: 0.15rem; }
+  .dashly-text-display h1 { font-size: 1.5rem; font-weight: 700; line-height: 1.25; }
+  .dashly-text-display h2 { font-size: 1.15rem; font-weight: 600; line-height: 1.3; }
+  .dashly-text-display p { line-height: 1.6; }
+  .dashly-text-display ul { list-style: disc; padding-left: 1.2rem; }
+  .dashly-text-display ol { list-style: decimal; padding-left: 1.2rem; }
+`
+
+function TextToolbar({ editor }: { editor: ReturnType<typeof useEditor> | null }) {
+  const s = useEditorState({
+    editor,
+    selector: ctx => ({
+      bold:    ctx.editor?.isActive("bold")                   ?? false,
+      italic:  ctx.editor?.isActive("italic")                 ?? false,
+      under:   ctx.editor?.isActive("underline")              ?? false,
+      normal: !(ctx.editor?.isActive("heading")               ?? false),
+      h1:      ctx.editor?.isActive("heading", { level: 1 })  ?? false,
+      h2:      ctx.editor?.isActive("heading", { level: 2 })  ?? false,
+      bullet:  ctx.editor?.isActive("bulletList")             ?? false,
+      ordered: ctx.editor?.isActive("orderedList")            ?? false,
+      alignL:  ctx.editor?.isActive({ textAlign: "left" })    ?? false,
+      alignC:  ctx.editor?.isActive({ textAlign: "center" })  ?? false,
+      alignR:  ctx.editor?.isActive({ textAlign: "right" })   ?? false,
+    }),
+  })
+  if (!editor || !s) return null
+
+  const btn = (active: boolean) =>
+    `h-7 w-7 rounded flex items-center justify-center transition-colors ${
+      active
+        ? "bg-accent text-accent-foreground"
+        : "text-foreground/70 hover:bg-accent hover:text-accent-foreground"
+    }`
+  const sep = <div className="w-px h-4 bg-border mx-0.5" />
+
+  return (
+    <div
+      className="flex items-center gap-0.5 px-2 py-1.5 shrink-0"
+      onMouseDown={e => e.preventDefault()}
+    >
+      <button type="button" className={btn(s.bold)}    title="Bold"          onClick={() => editor.chain().focus().toggleBold().run()}><BoldIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.italic)}  title="Italic"        onClick={() => editor.chain().focus().toggleItalic().run()}><ItalicIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.under)}   title="Underline"     onClick={() => editor.chain().focus().toggleUnderline().run()}><UnderlineIconLucide className="size-3.5" /></button>
+      {sep}
+      <button type="button" className={btn(s.normal)}  title="Normal text"   onClick={() => editor.chain().focus().setParagraph().run()}><TypeIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.h1)}      title="Heading 1"     onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1Icon className="size-3.5" /></button>
+      <button type="button" className={btn(s.h2)}      title="Heading 2"     onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2Icon className="size-3.5" /></button>
+      {sep}
+      <button type="button" className={btn(s.bullet)}  title="Bullet list"   onClick={() => editor.chain().focus().toggleBulletList().run()}><ListIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.ordered)} title="Numbered list" onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrderedIcon className="size-3.5" /></button>
+      {sep}
+      <button type="button" className={btn(s.alignL)}  title="Align left"    onClick={() => editor.chain().focus().setTextAlign("left").run()}><AlignLeftIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.alignC)}  title="Align center"  onClick={() => editor.chain().focus().setTextAlign("center").run()}><AlignCenterIcon className="size-3.5" /></button>
+      <button type="button" className={btn(s.alignR)}  title="Align right"   onClick={() => editor.chain().focus().setTextAlign("right").run()}><AlignRightIcon className="size-3.5" /></button>
+    </div>
+  )
+}
+
+function TextCard({ item, onEdit }: { item: LayoutItem; onEdit: () => void }) {
+  if (!item.text) return null
+  return (
+    <>
+      <style>{TEXT_EDITOR_STYLES}</style>
+      <Card
+        className="h-full bg-card overflow-hidden"
+        style={{ padding: 0, gap: 0 }}
+        onDoubleClick={e => { e.stopPropagation(); onEdit() }}
+      >
+        <div
+          className="dashly-text-display h-full px-4 py-3 text-sm overflow-hidden"
+          dangerouslySetInnerHTML={{ __html: item.text.content || "<p></p>" }}
+        />
+      </Card>
+    </>
+  )
+}
+
+function TextEditDialog({ item, onSave, onClose }: {
+  item: LayoutItem
+  onSave: (html: string) => void
+  onClose: () => void
+}) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      TiptapUnderline,
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      Placeholder.configure({ placeholder: "Start typing…" }),
+    ],
+    content: item.text?.content ?? "<h1></h1>",
+    autofocus: "end",
+  })
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      {/* Transparent wrapper — toolbar and tile are separate visual elements */}
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-none p-0 gap-0 flex flex-col items-center"
+        style={{ background: "transparent", border: "none", boxShadow: "none", width: "auto" }}
+      >
+        <style>{TEXT_EDITOR_STYLES}</style>
+
+        {/* Compact toolbar — single row, no wrapping, X to close at the far right */}
+        <div className="mb-2 rounded-lg border border-border bg-background shadow-lg overflow-hidden flex items-center flex-nowrap">
+          <TextToolbar editor={editor} />
+          <div className="w-px h-5 bg-border flex-none mx-0.5" />
+          <button
+            type="button"
+            title="Close (Esc)"
+            onClick={onClose}
+            className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground flex-none mr-1"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        </div>
+
+        {/* Tile at exact canvas size — overflow-hidden matches on-canvas clipping, no scrollbar */}
+        <div
+          className="rounded-xl border border-border shadow-lg overflow-hidden"
+          style={{ width: item.w, maxWidth: "calc(100vw - 32px)" }}
+        >
+          <div
+            className="dashly-text-editor bg-card px-4 py-3 overflow-hidden cursor-text"
+            style={{ height: Math.max(item.h, 80) }}
+          >
+            <EditorContent editor={editor} />
+          </div>
+        </div>
+
+        {/* Save / Cancel — centred below the tile */}
+        <div
+          className="mt-2 flex justify-center gap-2"
+          style={{ width: item.w, maxWidth: "calc(100vw - 32px)" }}
+        >
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={() => { onSave(editor?.getHTML() ?? "<p></p>"); onClose() }}>Save</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ─── StatCard ─────────────────────────────────────────────────────────────────
 
 function StatCard({ item }: { item: LayoutItem }) {
@@ -561,11 +730,12 @@ function StatCard({ item }: { item: LayoutItem }) {
 
 // ─── ChartCard ────────────────────────────────────────────────────────────────
 
-function ChartCard({ item, columns, rows, onToggleOrientation }: {
+function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
   item: LayoutItem
   columns: ColumnInfo[]
   rows: string[][]
   onToggleOrientation?: () => void
+  isPreview?: boolean
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
@@ -635,7 +805,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation }: {
                 cursor={false}
                 content={<ChartTooltipContent formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), yCol]} />}
               />
-              <Bar dataKey="y" fill="var(--color-y)" radius={[0, 4, 4, 0]} maxBarSize={32} />
+              <Bar dataKey="y" fill="var(--color-y)" radius={[0, 4, 4, 0]} maxBarSize={32} animationBegin={0} />
             </BarChart>
           ) : (
             <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
@@ -657,7 +827,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation }: {
                 cursor={false}
                 content={<ChartTooltipContent formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), yCol]} />}
               />
-              <Bar dataKey="y" fill="var(--color-y)" radius={[4, 4, 0, 0]} maxBarSize={48} />
+              <Bar dataKey="y" fill="var(--color-y)" radius={[4, 4, 0, 0]} maxBarSize={48} animationBegin={0} />
             </BarChart>
           )}
         </ChartContainer>
@@ -668,10 +838,11 @@ function ChartCard({ item, columns, rows, onToggleOrientation }: {
 
 // ─── LineCard ─────────────────────────────────────────────────────────────────
 
-function LineCard({ item, columns, rows }: {
+function LineCard({ item, columns, rows, isPreview }: {
   item: LayoutItem
   columns: ColumnInfo[]
   rows: string[][]
+  isPreview?: boolean
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
@@ -694,7 +865,7 @@ function LineCard({ item, columns, rows }: {
     : []
 
   const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
-  const curveType = smooth !== false ? "natural" : "linear"
+  const curveType = smooth !== false ? "monotone" : "linear"
 
   const chartCfg: ShadChartConfig = {
     y:  { label: yCol,  theme: palette.primary },
@@ -725,6 +896,7 @@ function LineCard({ item, columns, rows }: {
               axisLine={false}
               tickFormatter={n => fmtValue(n as number)}
               width={48}
+              domain={[(d: number) => Math.min(0, d), "auto"]}
             />
             <ChartTooltip
               cursor={false}
@@ -779,10 +951,11 @@ function LineCard({ item, columns, rows }: {
 
 // ─── AreaCard ─────────────────────────────────────────────────────────────────
 
-function AreaCard({ item, columns, rows }: {
+function AreaCard({ item, columns, rows, isPreview }: {
   item: LayoutItem
   columns: ColumnInfo[]
   rows: string[][]
+  isPreview?: boolean
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
@@ -805,7 +978,7 @@ function AreaCard({ item, columns, rows }: {
     : []
 
   const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
-  const curveType = smooth !== false ? "natural" : "linear"
+  const curveType = smooth !== false ? "monotone" : "linear"
   const uid = item.id
 
   const chartCfg: ShadChartConfig = {
@@ -862,6 +1035,7 @@ function AreaCard({ item, columns, rows }: {
               stroke="var(--color-y)"
               strokeWidth={2}
               fillOpacity={1}
+              animationBegin={0}
               {...(yCol2Info && stacked ? { stackId: "a" } : {})}
             />
             {yCol2Info && (
@@ -872,6 +1046,7 @@ function AreaCard({ item, columns, rows }: {
                 stroke="var(--color-y2)"
                 strokeWidth={2}
                 fillOpacity={1}
+                animationBegin={0}
                 {...(stacked ? { stackId: "a" } : {})}
               />
             )}
@@ -885,10 +1060,11 @@ function AreaCard({ item, columns, rows }: {
 
 // ─── PieCard ──────────────────────────────────────────────────────────────────
 
-function PieCard({ item, columns, rows }: {
+function PieCard({ item, columns, rows, isPreview }: {
   item: LayoutItem
   columns: ColumnInfo[]
   rows: string[][]
+  isPreview?: boolean
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
@@ -923,7 +1099,7 @@ function PieCard({ item, columns, rows }: {
                 formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), ""]}
               />}
             />
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius="35%" strokeWidth={2}>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius="35%" strokeWidth={2} animationBegin={0}>
               {showCenter && (
                 <PieLabel
                   content={({ viewBox }) => {
@@ -1328,7 +1504,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         // Scroll on the gutter, or pinch-to-zoom anywhere → zoom toward cursor
         const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
         const newScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE)
-        const rect = outer.getBoundingClientRect()
+        const rect = outer!.getBoundingClientRect()
         const cx = e.clientX - rect.left
         const cy = e.clientY - rect.top
         viewportRef.current = {
@@ -1439,7 +1615,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     function trackMouse(e: MouseEvent) { mx = e.clientX; my = e.clientY }
 
     function tick() {
-      const rect = outer.getBoundingClientRect()
+      const rect = outer!.getBoundingClientRect()
       let vx = 0, vy = 0
       const ld = mx - rect.left, rd = rect.right - mx
       const td = my - rect.top,  bd = rect.bottom - my
@@ -1494,6 +1670,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   // ── drop ghost (shared between stat and chart drags) ──
   const [dropGhost, setDropGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
+  // ── text tile inline edit state ──
+  const [editingTextId, setEditingTextId] = useState<string | null>(null)
+
   // ── stat card dialog state ──
   const [pendingPos,      setPendingPos]      = useState<{ x: number; y: number } | null>(null)
   const [editingId,       setEditingId]       = useState<string | null>(null)
@@ -1523,6 +1702,15 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   const [chartConfigStacked,    setChartConfigStacked]    = useState(false)
   const [chartConfigShowLegend, setChartConfigShowLegend] = useState(false)
   const [chartConfigShowCenter, setChartConfigShowCenter] = useState(true)
+  const [chartConfigOrientation, setChartConfigOrientation] = useState<"horizontal" | "vertical">("vertical")
+  // Delayed flag so the preview chart only mounts after the dialog CSS animation finishes
+  const [chartPreviewReady, setChartPreviewReady] = useState(false)
+  useEffect(() => {
+    const open = pendingChartPos !== null || editingChartId !== null
+    if (!open) { setChartPreviewReady(false); return }
+    const t = setTimeout(() => setChartPreviewReady(true), 120)
+    return () => clearTimeout(t)
+  }, [pendingChartPos, editingChartId])
 
   // ── table card dialog state ──
   const [pendingTablePos,  setPendingTablePos]  = useState<{ x: number; y: number } | null>(null)
@@ -1630,6 +1818,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         setChartConfigStacked(false)
         setChartConfigShowLegend(chartType === "pie")
         setChartConfigShowCenter(true)
+        setChartConfigOrientation("vertical")
       }
 
       document.addEventListener("mousemove", onMove)
@@ -1687,9 +1876,60 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     return () => window.removeEventListener("sidebar-drag-table", handler)
   }, [])
 
+  // ── sidebar text drag — no dialog, placed immediately then auto-focused ──
+  useEffect(() => {
+    const handler = () => {
+      setDragging(true)
+
+      const onMove = (ev: MouseEvent) => {
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) {
+          setDropGhost(null); return
+        }
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) { setDropGhost(null); return }
+        const s = scaleRef.current
+        setDropGhost({
+          x: clamp((ev.clientX - rect.left) / s - TEXT_GHOST_W / 2, SNAP, canvasW - TEXT_GHOST_W - SNAP),
+          y: Math.max(SNAP, (ev.clientY - rect.top) / s - TEXT_GHOST_H / 2),
+          w: TEXT_GHOST_W, h: TEXT_GHOST_H,
+        })
+      }
+
+      const onUp = (ev: MouseEvent) => {
+        document.removeEventListener("mousemove", onMove)
+        document.removeEventListener("mouseup",   onUp)
+        setDragging(false)
+        setDropGhost(null)
+        const outerRect = outerRef.current?.getBoundingClientRect()
+        if (!outerRect || ev.clientX < outerRect.left || ev.clientX > outerRect.right || ev.clientY < outerRect.top || ev.clientY > outerRect.bottom) return
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) return
+        const s = scaleRef.current
+        const tx = clamp(snapTo((ev.clientX - rect.left) / s - TEXT_GHOST_W / 2), SNAP, canvasW - TEXT_GHOST_W - SNAP)
+        const ty = Math.max(SNAP, snapTo((ev.clientY - rect.top) / s - TEXT_GHOST_H / 2))
+        const id = `text-${Date.now()}`
+        pushHistory()
+        setLayout(prev => {
+          const cw = canvasW
+          const withNew: LayoutItem[] = [...prev, { id, x: tx, y: ty, w: TEXT_GHOST_W, h: TEXT_GHOST_H, type: "text", text: { content: "<h1></h1>" } }]
+          const pos = resolveCollision(id, tx, ty, TEXT_GHOST_W, TEXT_GHOST_H, withNew, cw, true) ?? { x: tx, y: ty }
+          return [...prev, { id, x: pos.x, y: pos.y, w: TEXT_GHOST_W, h: TEXT_GHOST_H, type: "text", text: { content: "<h1></h1>" } }]
+        })
+        setEditingTextId(id)
+      }
+
+      document.addEventListener("mousemove", onMove)
+      document.addEventListener("mouseup",   onUp)
+    }
+
+    window.addEventListener("sidebar-drag-text", handler)
+    return () => window.removeEventListener("sidebar-drag-text", handler)
+  }, [canvasW, pushHistory])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setSelectedId(null); return }
+      if (e.key === "Escape") { setSelectedId(null); setEditingTextId(null); return }
       // Don't intercept shortcuts while the user is typing in a form field
       const tag = (e.target as HTMLElement).tagName
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement).isContentEditable) return
@@ -1757,7 +1997,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setConfigShowTrend(!!trend)
       setEditingId(id)
     } else if (item.chart) {
-      const { xCol, yCol, yCol2, agg, title, filter, type, smooth, showLabels, stacked, showLegend, showCenter } = item.chart
+      const { xCol, yCol, yCol2, agg, title, filter, type, smooth, showLabels, stacked, showLegend, showCenter, orientation } = item.chart
       setChartDialogType(type)
       setChartConfigXCol(xCol)
       setChartConfigYCol(yCol)
@@ -1770,6 +2010,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setChartConfigStacked(stacked ?? false)
       setChartConfigShowLegend(showLegend ?? (type === "pie"))
       setChartConfigShowCenter(showCenter !== false)
+      setChartConfigOrientation(orientation ?? "vertical")
       setEditingChartId(id)
     } else if (item.table) {
       const { cols, title, filter } = item.table
@@ -1777,6 +2018,8 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setTableConfigCols(cols)
       setTableConfigFilter(filter ?? "all")
       setEditingTableId(id)
+    } else if (item.type === "text") {
+      setEditingTextId(id)
     }
   }, [])
 
@@ -1853,6 +2096,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         showCenter: chartConfigShowCenter,
         showLegend: chartConfigShowLegend,
       }),
+      ...(chartDialogType === "bar" && {
+        orientation: chartConfigOrientation,
+      }),
     }
     if (editingChartId) {
       setLayout(prev => prev.map(it => it.id === editingChartId ? { ...it, chart } : it))
@@ -1868,7 +2114,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingChartPos(null)
     }
-  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter, pushHistory])
+  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter, chartConfigOrientation, pushHistory])
 
   const handleTableConfirm = useCallback(() => {
     if (!pendingTablePos && !editingTableId) return
@@ -1922,7 +2168,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     <PaletteContext.Provider value={palette}>
       {/* ── stat card config dialog ── */}
       <Dialog open={pendingPos !== null || editingId !== null} onOpenChange={open => { if (!open) { setPendingPos(null); setEditingId(null); setShowDatePicker(false); setDatePickerPos(null) } }}>
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit stat card" : "Configure stat card"}</DialogTitle>
             <DialogDescription>{editingId ? "Update the metric displayed on this card." : "Choose which metric to display on this card."}</DialogDescription>
@@ -2039,22 +2285,39 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                 </div>
               )}
 
-              {previewVal !== null && (
-                <div className="rounded-lg border border-border bg-muted/30 p-3 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">
-                    {configTitle.trim() || [AGG_LABELS[configAgg], configCol, previewFilterLabel].filter(Boolean).join(" · ")}
-                  </p>
-                  <p className="text-2xl font-semibold tabular-nums">{previewVal}</p>
-                  {previewTrend && (
-                    <div className={`flex items-center justify-center gap-1 mt-1 text-xs font-medium ${previewTrend.up ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}`}>
-                      {previewTrend.up
-                        ? <TrendingUpIcon className="size-3" />
-                        : <TrendingDownIcon className="size-3" />}
-                      {previewTrend.pct} {previewTrend.label}
-                    </div>
-                  )}
-                </div>
-              )}
+              {previewVal !== null && (() => {
+                const previewLabel = configTitle.trim() || [AGG_LABELS[configAgg], configCol, previewFilterLabel].filter(Boolean).join(" · ")
+                const PreviewTrendIcon = previewTrend?.up === false ? TrendingDownIcon : TrendingUpIcon
+                return (
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Preview</p>
+                    <Card className="bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card pointer-events-none select-none">
+                      <CardHeader>
+                        <CardDescription>{previewLabel}</CardDescription>
+                        <CardTitle className="text-2xl font-semibold tabular-nums">{previewVal}</CardTitle>
+                        {previewTrend && (
+                          <CardAction>
+                            <Badge variant="outline">
+                              <PreviewTrendIcon />
+                              {previewTrend.pct}
+                            </Badge>
+                          </CardAction>
+                        )}
+                      </CardHeader>
+                      <CardFooter className="flex-col items-start gap-1.5 text-sm">
+                        <div className="line-clamp-1 flex items-center gap-2 font-medium">
+                          {previewTrend
+                            ? <>{previewTrend.up ? "Trending up" : "Trending down"} <PreviewTrendIcon className="size-4" /> {previewTrend.label}</>
+                            : previewFilterLabel ?? `${AGG_LABELS[configAgg]} of ${configCol}`}
+                        </div>
+                        {previewTrend
+                          ? previewFilterLabel && <div className="text-muted-foreground">{previewFilterLabel}</div>
+                          : <div className="text-muted-foreground">{AGG_LABELS[configAgg]} of {configCol}</div>}
+                      </CardFooter>
+                    </Card>
+                  </div>
+                )
+              })()}
             </div>
           )}
 
@@ -2066,168 +2329,209 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       </Dialog>
 
       {/* ── chart config dialog ── */}
-      <Dialog open={pendingChartPos !== null || editingChartId !== null} onOpenChange={open => { if (!open) { setPendingChartPos(null); setEditingChartId(null) } }}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{editingChartId ? `Edit ${chartDialogType} chart` : `Configure ${chartDialogType} chart`}</DialogTitle>
-            <DialogDescription>Choose the columns to plot.</DialogDescription>
-          </DialogHeader>
+      {(() => {
+        const previewChartItem: LayoutItem = {
+          id: "dialog-preview", x: 0, y: 0, w: 480, h: 320, type: "chart",
+          chart: {
+            type: chartDialogType,
+            xCol: chartConfigXCol,
+            yCol: chartConfigYCol,
+            yCol2: chartConfigYCol2 || undefined,
+            agg: chartConfigAgg,
+            title: chartConfigTitle,
+            filter: chartConfigFilter,
+            smooth: chartConfigSmooth,
+            showLabels: chartConfigShowLabels,
+            stacked: chartConfigStacked,
+            showLegend: chartConfigShowLegend,
+            showCenter: chartConfigShowCenter,
+            orientation: chartConfigOrientation,
+          },
+        }
+        const hasPreviewData = !!(chartConfigXCol && chartConfigYCol)
+        return (
+          <Dialog open={pendingChartPos !== null || editingChartId !== null} onOpenChange={open => { if (!open) { setPendingChartPos(null); setEditingChartId(null) } }}>
+            <DialogContent className="p-0 gap-0 flex flex-col overflow-hidden" style={{ maxWidth: '56rem', maxHeight: '90vh' }}>
+              <DialogHeader className="px-6 pt-6 pb-4 flex-none border-b border-border">
+                <DialogTitle>{editingChartId ? `Edit ${chartDialogType} chart` : `Configure ${chartDialogType} chart`}</DialogTitle>
+                <DialogDescription>Choose the columns to plot.</DialogDescription>
+              </DialogHeader>
 
-          {numCols.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No numeric columns found in the connected sheet.</p>
-          ) : (
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="chart-title">Title <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                <Input
-                  id="chart-title"
-                  value={chartConfigTitle}
-                  onChange={e => setChartConfigTitle(e.target.value)}
-                  placeholder={chartConfigXCol && chartConfigYCol ? `${AGG_LABELS[chartConfigAgg]} ${chartConfigYCol} by ${chartConfigXCol}` : "Chart title"}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="chart-x">{chartDialogType === "pie" ? "Slice by (category)" : "X axis (categories)"}</Label>
-                <NativeSelect id="chart-x" value={chartConfigXCol} onChange={e => setChartConfigXCol(e.target.value)} className="w-full">
-                  {catCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
-                </NativeSelect>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="chart-y">Y axis (values)</Label>
-                <NativeSelect id="chart-y" value={chartConfigYCol} onChange={e => setChartConfigYCol(e.target.value)} className="w-full">
-                  {numCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
-                </NativeSelect>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="chart-agg">Aggregation</Label>
-                <NativeSelect id="chart-agg" value={chartConfigAgg} onChange={e => setChartConfigAgg(e.target.value as Agg)} className="w-full">
-                  <NativeSelectOption value="sum">Sum</NativeSelectOption>
-                  <NativeSelectOption value="avg">Average</NativeSelectOption>
-                  <NativeSelectOption value="count">Count</NativeSelectOption>
-                  <NativeSelectOption value="max">Maximum</NativeSelectOption>
-                  <NativeSelectOption value="min">Minimum</NativeSelectOption>
-                </NativeSelect>
-              </div>
-
-              {hasDates && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-baseline justify-between">
-                    <Label htmlFor="chart-filter">Period</Label>
-                    {dataMaxRef && (
-                      <span className="text-xs text-muted-foreground">
-                        Data through {dataMaxRef.toLocaleDateString(undefined, { month: "short", year: "numeric" })}
-                      </span>
-                    )}
-                  </div>
-                  <NativeSelect id="chart-filter" value={chartConfigFilter} onChange={e => setChartConfigFilter(e.target.value as FilterPeriod)} className="w-full">
-                    <NativeSelectOption value="all">All time</NativeSelectOption>
-                    <NativeSelectOption value="this_month">Current month</NativeSelectOption>
-                    <NativeSelectOption value="last_month">Last completed month</NativeSelectOption>
-                    <NativeSelectOption value="this_quarter">Current quarter</NativeSelectOption>
-                    <NativeSelectOption value="last_quarter">Last completed quarter</NativeSelectOption>
-                    <NativeSelectOption value="this_year">Current year</NativeSelectOption>
-                    <NativeSelectOption value="last_year">Last completed year</NativeSelectOption>
-                    <NativeSelectOption value="last_7d">Last 7 days</NativeSelectOption>
-                    <NativeSelectOption value="last_30d">Last 30 days</NativeSelectOption>
-                    <NativeSelectOption value="last_90d">Last 90 days</NativeSelectOption>
-                  </NativeSelect>
-                </div>
-              )}
-
-              {chartDialogType === "pie" && (
-                <div className="flex flex-col gap-2">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={chartConfigShowCenter}
-                      onChange={e => setChartConfigShowCenter(e.target.checked)}
-                      className="size-4 rounded border-input accent-primary"
-                    />
-                    <span className="text-sm text-muted-foreground">Show center total</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={chartConfigShowLegend}
-                      onChange={e => setChartConfigShowLegend(e.target.checked)}
-                      className="size-4 rounded border-input accent-primary"
-                    />
-                    <span className="text-sm text-muted-foreground">Show legend</span>
-                  </label>
-                </div>
-              )}
-
-              {(chartDialogType === "line" || chartDialogType === "area") && (
-                <>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="chart-y2">Second series <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                    <NativeSelect id="chart-y2" value={chartConfigYCol2} onChange={e => { setChartConfigYCol2(e.target.value); if (!e.target.value) { setChartConfigStacked(false); setChartConfigShowLegend(false) } }} className="w-full">
-                      <NativeSelectOption value="">None</NativeSelectOption>
-                      {numCols.filter(c => c.name !== chartConfigYCol).map(c => (
-                        <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={chartConfigSmooth}
-                        onChange={e => setChartConfigSmooth(e.target.checked)}
-                        className="size-4 rounded border-input accent-primary"
-                      />
-                      <span className="text-sm text-muted-foreground">Smooth curve</span>
-                    </label>
-                    {chartDialogType === "line" && (
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={chartConfigShowLabels}
-                          onChange={e => setChartConfigShowLabels(e.target.checked)}
-                          className="size-4 rounded border-input accent-primary"
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                {/* ── Left: form fields ── */}
+                <div className="w-72 flex-none overflow-y-auto p-6 flex flex-col gap-4 border-r border-border">
+                  {numCols.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No numeric columns found in the connected sheet.</p>
+                  ) : (
+                    <>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="chart-title">Title <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                        <Input
+                          id="chart-title"
+                          value={chartConfigTitle}
+                          onChange={e => setChartConfigTitle(e.target.value)}
+                          placeholder={chartConfigXCol && chartConfigYCol ? `${AGG_LABELS[chartConfigAgg]} ${chartConfigYCol} by ${chartConfigXCol}` : "Chart title"}
                         />
-                        <span className="text-sm text-muted-foreground">Show data labels</span>
-                      </label>
-                    )}
-                    {chartDialogType === "area" && chartConfigYCol2 && (
-                      <>
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={chartConfigStacked}
-                            onChange={e => setChartConfigStacked(e.target.checked)}
-                            className="size-4 rounded border-input accent-primary"
-                          />
-                          <span className="text-sm text-muted-foreground">Stack series</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={chartConfigShowLegend}
-                            onChange={e => setChartConfigShowLegend(e.target.checked)}
-                            className="size-4 rounded border-input accent-primary"
-                          />
-                          <span className="text-sm text-muted-foreground">Show legend</span>
-                        </label>
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+                      </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setPendingChartPos(null); setEditingChartId(null) }}>Cancel</Button>
-            <Button onClick={handleChartConfirm} disabled={!chartConfigXCol || !chartConfigYCol}>
-              {editingChartId ? "Save changes" : "Add to dashboard"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="chart-x">{chartDialogType === "pie" ? "Slice by (category)" : "X axis (categories)"}</Label>
+                        <NativeSelect id="chart-x" value={chartConfigXCol} onChange={e => setChartConfigXCol(e.target.value)} className="w-full">
+                          {catCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
+                        </NativeSelect>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="chart-y">Y axis (values)</Label>
+                        <NativeSelect id="chart-y" value={chartConfigYCol} onChange={e => setChartConfigYCol(e.target.value)} className="w-full">
+                          {numCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
+                        </NativeSelect>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="chart-agg">Aggregation</Label>
+                        <NativeSelect id="chart-agg" value={chartConfigAgg} onChange={e => setChartConfigAgg(e.target.value as Agg)} className="w-full">
+                          <NativeSelectOption value="sum">Sum</NativeSelectOption>
+                          <NativeSelectOption value="avg">Average</NativeSelectOption>
+                          <NativeSelectOption value="count">Count</NativeSelectOption>
+                          <NativeSelectOption value="max">Maximum</NativeSelectOption>
+                          <NativeSelectOption value="min">Minimum</NativeSelectOption>
+                        </NativeSelect>
+                      </div>
+
+                      {hasDates && (
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-baseline justify-between">
+                            <Label htmlFor="chart-filter">Period</Label>
+                            {dataMaxRef && (
+                              <span className="text-xs text-muted-foreground">
+                                {dataMaxRef.toLocaleDateString(undefined, { month: "short", year: "numeric" })}
+                              </span>
+                            )}
+                          </div>
+                          <NativeSelect id="chart-filter" value={chartConfigFilter} onChange={e => setChartConfigFilter(e.target.value as FilterPeriod)} className="w-full">
+                            <NativeSelectOption value="all">All time</NativeSelectOption>
+                            <NativeSelectOption value="this_month">Current month</NativeSelectOption>
+                            <NativeSelectOption value="last_month">Last completed month</NativeSelectOption>
+                            <NativeSelectOption value="this_quarter">Current quarter</NativeSelectOption>
+                            <NativeSelectOption value="last_quarter">Last completed quarter</NativeSelectOption>
+                            <NativeSelectOption value="this_year">Current year</NativeSelectOption>
+                            <NativeSelectOption value="last_year">Last completed year</NativeSelectOption>
+                            <NativeSelectOption value="last_7d">Last 7 days</NativeSelectOption>
+                            <NativeSelectOption value="last_30d">Last 30 days</NativeSelectOption>
+                            <NativeSelectOption value="last_90d">Last 90 days</NativeSelectOption>
+                          </NativeSelect>
+                        </div>
+                      )}
+
+                      {chartDialogType === "bar" && (
+                        <div className="flex flex-col gap-1.5">
+                          <Label>Orientation</Label>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setChartConfigOrientation("vertical")}
+                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation !== "horizontal" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                            >
+                              <BarChart2Icon className="size-3.5" /> Vertical
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setChartConfigOrientation("horizontal")}
+                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation === "horizontal" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                            >
+                              <BarChartHorizontalIcon className="size-3.5" /> Horizontal
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {chartDialogType === "pie" && (
+                        <div className="flex flex-col gap-2">
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" checked={chartConfigShowCenter} onChange={e => setChartConfigShowCenter(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                            <span className="text-sm text-muted-foreground">Show center total</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                            <span className="text-sm text-muted-foreground">Show legend</span>
+                          </label>
+                        </div>
+                      )}
+
+                      {(chartDialogType === "line" || chartDialogType === "area") && (
+                        <>
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="chart-y2">Second series <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                            <NativeSelect id="chart-y2" value={chartConfigYCol2} onChange={e => { setChartConfigYCol2(e.target.value); if (!e.target.value) { setChartConfigStacked(false); setChartConfigShowLegend(false) } }} className="w-full">
+                              <NativeSelectOption value="">None</NativeSelectOption>
+                              {numCols.filter(c => c.name !== chartConfigYCol).map(c => (
+                                <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>
+                              ))}
+                            </NativeSelect>
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input type="checkbox" checked={chartConfigSmooth} onChange={e => setChartConfigSmooth(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                              <span className="text-sm text-muted-foreground">Smooth curve</span>
+                            </label>
+                            {chartDialogType === "line" && (
+                              <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <input type="checkbox" checked={chartConfigShowLabels} onChange={e => setChartConfigShowLabels(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                <span className="text-sm text-muted-foreground">Show data labels</span>
+                              </label>
+                            )}
+                            {chartDialogType === "area" && chartConfigYCol2 && (
+                              <>
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <input type="checkbox" checked={chartConfigStacked} onChange={e => setChartConfigStacked(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                  <span className="text-sm text-muted-foreground">Stack series</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                  <span className="text-sm text-muted-foreground">Show legend</span>
+                                </label>
+                              </>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* ── Right: live preview ── */}
+                <div className="flex-1 flex flex-col p-5 bg-muted/30 min-w-0 min-h-0">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-3">Preview</p>
+                  {hasPreviewData ? (
+                    // Explicit height so Recharts can measure — flex-1 alone gives 0px
+                    <div className="overflow-hidden rounded-xl border border-border" style={{ flex: "1 1 0", minHeight: 260 }}>
+                      {chartPreviewReady && (chartDialogType === "line"
+                        ? <LineCard  item={previewChartItem} columns={columns} rows={rows} isPreview />
+                        : chartDialogType === "area"
+                        ? <AreaCard  item={previewChartItem} columns={columns} rows={rows} isPreview />
+                        : chartDialogType === "pie"
+                        ? <PieCard   item={previewChartItem} columns={columns} rows={rows} isPreview />
+                        : <ChartCard item={previewChartItem} columns={columns} rows={rows} isPreview onToggleOrientation={() => setChartConfigOrientation(prev => prev === "horizontal" ? "vertical" : "horizontal")} />)}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground" style={{ flex: "1 1 0", minHeight: 260 }}>
+                      Select columns to see a preview
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-none justify-end gap-2 px-6 py-4 border-t border-border bg-muted/50">
+                <Button variant="outline" onClick={() => { setPendingChartPos(null); setEditingChartId(null) }}>Cancel</Button>
+                <Button onClick={handleChartConfirm} disabled={!chartConfigXCol || !chartConfigYCol}>
+                  {editingChartId ? "Save changes" : "Add to dashboard"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
 
       {/* ── table config dialog ── */}
       <Dialog open={pendingTablePos !== null || editingTableId !== null} onOpenChange={open => { if (!open) { setPendingTablePos(null); setEditingTableId(null) } }}>
@@ -2306,6 +2610,23 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         </DialogContent>
       </Dialog>
 
+      {/* ── text tile edit dialog ── */}
+      {editingTextId && (() => {
+        const textItem = layout.find(it => it.id === editingTextId)
+        return textItem ? (
+          <TextEditDialog
+            item={textItem}
+            onSave={html => {
+              pushHistory()
+              setLayout(prev => prev.map(it =>
+                it.id === editingTextId && it.text ? { ...it, text: { ...it.text, content: html } } : it
+              ))
+            }}
+            onClose={() => setEditingTextId(null)}
+          />
+        ) : null
+      })()}
+
       {/* ── canvas viewport ── */}
       <div ref={outerRef} className="flex-1 overflow-hidden relative bg-muted/60" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
         <div
@@ -2336,7 +2657,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
               onDuplicate={() => { handleDuplicate(item.id); setSelectedId(null) }}
               onDelete={() => { handleDelete(item.id); setSelectedId(null) }}
             >
-              {item.type === "table"
+              {item.type === "text"
+                ? <TextCard item={item} onEdit={() => setEditingTextId(item.id)} />
+                : item.type === "table"
                 ? <TableCard item={item} columns={columns} rows={rows} />
                 : item.type === "stat"
                 ? <StatCard item={item} />

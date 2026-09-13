@@ -81,11 +81,15 @@ export function buildDemoLayout(canvasW: number): LayoutItem[] {
   // Usable inner span (between left margin and right boundary)
   const span = maxRight - S
 
+  // ── Row 0: full-width title text tile ────────────────────────────────
+  const titleH = 3 * S   // 72px — header row
+  const titleY = S
+
   // ── Row 1: 4 equal stat cards ─────────────────────────────────────────
   // 4*statW + 3*S (gaps) = span  →  statW = (span - 3*S) / 4
   const statH = 6 * S  // 144px
   const statW = snapFloor((span - 3 * S) / 4)
-  const row1Y = S
+  const row1Y = titleY + titleH + S
 
   // ── Row 2: line chart (left) + pie chart (right) ──────────────────────
   // lineW + S (gap) + pieW = span  →  lineW = span - S - pieW
@@ -104,6 +108,11 @@ export function buildDemoLayout(canvasW: number): LayoutItem[] {
   const half2W = span - S - halfW
 
   return [
+    // Row 0 — full-width title
+    {
+      id: "demo-text-title", x: S, y: titleY, w: span, h: titleH, type: "text",
+      text: { content: "<h1>2024 Sales Dashboard</h1><p>E-commerce performance overview · January through August 2024</p>" },
+    },
     // Row 1 — 4 stat cards, all same width
     {
       id: "demo-stat-rev", x: S, y: row1Y, w: statW, h: statH, type: "stat",

@@ -151,6 +151,36 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 7. Saved dashboard hub — sidebar list of past dashboards persisted to DB (PlanetScale or Supabase)
 8. Landing page — pricing section, feature screenshots, hero GIF
 
+### Launch readiness
+
+**SEO / meta**
+- [ ] Meta title on every page
+- [ ] Meta description on every page
+- [ ] Open Graph image
+- [ ] Favicon set
+- [ ] robots.txt
+- [ ] sitemap.xml
+- [ ] Alt text on every image
+
+**UX / UI**
+- [ ] Custom 404 page
+- [ ] CTA above the fold on landing page
+- [ ] Mobile breakpoints
+- [ ] Sticky mobile CTA
+- [ ] Loading states
+- [ ] Form error states
+- [ ] Thank you page
+- [ ] Compressed images
+
+**Legal / compliance**
+- [ ] Privacy policy page
+- [ ] Terms and conditions page
+- [ ] Cookie banner
+- [ ] Real contact address
+
+**Growth**
+- [ ] Analytics installed
+
 **AI generation gotchas**:
 - Positions are in SNAP units (integers) in the prompt, multiplied by 24 server-side after parsing
 - `rightAlignRows()` nudges the rightmost tile in each row to flush with `MAX_RIGHT` (only if gap ≤ 2 SNAP units)
@@ -166,5 +196,10 @@ npm run dev
 ```
 
 Add `ANTHROPIC_API_KEY=sk-ant-...` to `apps/web/.env.local` to enable AI dashboard generation.
+
+## Dev workflow
+
+- **Test after every change** — boot the dev server and manually verify the affected behaviour before reporting a fix as done.
+- **Push only on user confirmation** — commit and push to GitHub only after the user has confirmed they're happy with how things are working.
 
 Test data CSVs are in `test-data/` — use `ecommerce_sales.csv` or `sales_pipeline.csv` with a local server, or upload to Google Sheets and paste the share URL.
