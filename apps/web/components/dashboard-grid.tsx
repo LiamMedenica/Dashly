@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react"
 import { createPortal } from "react-dom"
-import { BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Label as PieLabel, LabelList, XAxis, YAxis, CartesianGrid } from "recharts"
+import { BarChart, Bar, Cell, LineChart, Line, AreaChart, Area, PieChart, Pie, Label as PieLabel, LabelList, XAxis, YAxis, CartesianGrid } from "recharts"
 import {
   ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent,
   type ChartConfig as ShadChartConfig,
@@ -26,7 +26,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Calendar } from "@workspace/ui/components/calendar"
 import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/native-select"
-import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon, BoldIcon, ItalicIcon, UnderlineIcon as UnderlineIconLucide, ListIcon, ListOrderedIcon, Heading1Icon, Heading2Icon, TypeIcon, AlignLeftIcon, AlignCenterIcon, AlignRightIcon, XIcon } from "lucide-react"
+import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon, BoldIcon, ItalicIcon, UnderlineIcon as UnderlineIconLucide, ListIcon, ListOrderedIcon, Heading1Icon, Heading2Icon, TypeIcon, AlignLeftIcon, AlignCenterIcon, AlignRightIcon, XIcon, SlidersHorizontalIcon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
 import { toast } from "sonner"
@@ -52,6 +52,16 @@ const MIN_SCALE = 0.1
 const MAX_SCALE = 3
 
 const PaletteContext = createContext<ColorPalette>(COLOR_PALETTES[0]!)
+
+type SlicerFilters = Record<string, string>
+const FilterContext = createContext<{
+  filters: SlicerFilters
+  setFilter: (col: string, val: string | null) => void
+  clearAll: () => void
+  dateFrom: string | null   // ISO date string, null = no date filter
+  dateTo: string | null
+  setDateRange: (from: string | null, to: string | null) => void
+}>({ filters: {}, setFilter: () => {}, clearAll: () => {}, dateFrom: null, dateTo: null, setDateRange: () => {} })
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -100,6 +110,32 @@ function computeAgg(col: ColumnInfo, agg: Agg, rows: string[][]): number {
 
 const AGG_LABELS: Record<Agg, string> = {
   sum: "Total", avg: "Average", count: "Count", max: "Maximum", min: "Minimum",
+}
+
+function useCountUp(target: number, duration = 650): number {
+  const [current, setCurrent] = useState(0)
+  // null means "fresh mount" — animate from 0. Reset to null in cleanup so
+  // Strict Mode's second invocation and real remounts both start from 0.
+  const fromRef = useRef<number | null>(null)
+  const rafRef  = useRef<number | null>(null)
+  useEffect(() => {
+    if (!isFinite(target)) return
+    const from = fromRef.current ?? 0
+    fromRef.current = target
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const t0 = performance.now()
+    function tick(now: number) {
+      const p = Math.min((now - t0) / duration, 1)
+      setCurrent(from + (target - from) * (1 - Math.pow(1 - p, 3)))
+      if (p < 1) rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      fromRef.current = null  // reset so next mount re-animates from 0
+    }
+  }, [target, duration])
+  return current
 }
 
 type FilterPeriod = "all" | "this_week" | "last_week" | "this_month" | "last_month" | "this_quarter" | "last_quarter" | "this_year" | "last_year" | "last_7d" | "last_30d" | "last_90d" | "custom"
@@ -190,6 +226,26 @@ function filterRows(rows: string[][], dateCol: ColumnInfo, filter: FilterPeriod,
     const t = new Date(r[dateCol.index] ?? "").getTime()
     return !isNaN(t) && t >= range.start.getTime() && t <= range.end.getTime()
   })
+}
+
+function applyGlobalFilter(rows: string[][], columns: ColumnInfo[], filters: SlicerFilters, dateFrom?: string | null, dateTo?: string | null): string[][] {
+  let result = rows
+  if (dateFrom && dateTo) {
+    const dateCol = columns.find(c => c.type === "date")
+    if (dateCol) {
+      const from = new Date(dateFrom).getTime()
+      const to = new Date(dateTo + "T23:59:59").getTime()
+      result = result.filter(r => { const t = new Date(r[dateCol.index] ?? "").getTime(); return !isNaN(t) && t >= from && t <= to })
+    }
+  }
+  const entries = Object.entries(filters)
+  if (!entries.length) return result
+  return result.filter(row =>
+    entries.every(([colName, val]) => {
+      const col = columns.find(c => c.name === colName)
+      return col ? row[col.index] === val : true
+    })
+  )
 }
 
 function deriveTrend(
@@ -711,9 +767,10 @@ function TextEditDialog({ item, onSave, onClose }: {
 
 // ─── StatCard ─────────────────────────────────────────────────────────────────
 
-function StatCard({ item }: { item: LayoutItem }) {
+function StatCard({ item, columns, rows }: { item: LayoutItem, columns: ColumnInfo[], rows: string[][] }) {
   if (!item.stat) return null
   const palette = useContext(PaletteContext)
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
   const [isDark, setIsDark] = useState(() =>
     typeof document !== "undefined" && document.documentElement.classList.contains("dark")
   )
@@ -725,7 +782,19 @@ function StatCard({ item }: { item: LayoutItem }) {
     return () => obs.disconnect()
   }, [])
 
-  const { label, value, agg, column, filter, filterLabel, trend, trendUp, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
+  const { label, value: cachedValue, agg, column, filter, filterFrom, filterTo, filterLabel, trend, trendUp, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
+
+  // Re-compute value live so global filters are reflected without re-saving
+  const col = columns.find(c => c.name === column)
+  const dCol = columns.find(c => c.type === "date")
+  const periodRows = dCol && filter && filter !== "all"
+    ? filterRows(rows, dCol, filter, filterFrom, filterTo)
+    : rows
+  const rawNum = col
+    ? computeAgg(col, agg, applyGlobalFilter(periodRows, columns, filters, dateFrom, dateTo))
+    : NaN
+  const animatedNum = useCountUp(isFinite(rawNum) ? rawNum : 0)
+  const value = isFinite(rawNum) ? fmtValue(animatedNum) : (cachedValue ?? "—")
   const TrendIcon = trendUp === false ? TrendingDownIcon : TrendingUpIcon
   const paletteColor = isDark ? palette.primary.dark : palette.primary.light
   // Down uses a fixed warm-red oklch chosen to sit between the palette hues (none are at hue 350-5)
@@ -780,6 +849,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
+  const { filters, setFilter, dateFrom, dateTo } = useContext(FilterContext)
   const { title, xCol, yCol, agg, filter, filterFrom, filterTo, orientation = "vertical", showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo = columns.find(c => c.name === xCol)
@@ -790,10 +860,11 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
   const usedRows = dateCol && filter && filter !== "all"
     ? filterRows(rows, dateCol, filter, filterFrom, filterTo)
     : rows
-
-  const data = xColInfo && yColInfo ? aggregateByX(usedRows, xColInfo, yColInfo, agg) : []
+  const filteredRows = applyGlobalFilter(usedRows, columns, filters, dateFrom, dateTo)
+  const data = xColInfo && yColInfo ? aggregateByX(filteredRows, xColInfo, yColInfo, agg) : []
 
   const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
+  const filterKey = JSON.stringify(filters) + "|" + (dateFrom ?? "") + "|" + (dateTo ?? "")
 
   const chartCfg: ShadChartConfig = {
     y: { label: yCol, theme: palette.primary },
@@ -822,7 +893,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto">
           {isHorizontal ? (
-            <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
+            <BarChart key={filterKey} data={data} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
               <XAxis
                 type="number"
                 dataKey="y"
@@ -844,10 +915,22 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
                 cursor={false}
                 content={<ChartTooltipContent formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), yCol]} />}
               />
-              <Bar dataKey="y" fill="var(--color-y)" radius={[0, 4, 4, 0]} maxBarSize={32} animationBegin={0} />
+              <Bar
+                dataKey="y"
+                fill="var(--color-y)"
+                radius={[0, 4, 4, 0]}
+                maxBarSize={32}
+                animationBegin={0}
+                cursor={!isPreview && xColInfo && xColInfo.type !== "date" ? "pointer" : undefined}
+                onClick={!isPreview && xColInfo && xColInfo.type !== "date" ? (d: unknown) => { const v = (d as { payload?: { x?: string } })?.payload?.x; if (v) setFilter(xColInfo.name, v) } : undefined}
+              >
+                {xColInfo && filters[xColInfo.name] && data.map((entry, i) => (
+                  <Cell key={i} fill="var(--color-y)" fillOpacity={filters[xColInfo!.name] === entry.x ? 1 : 0.35} />
+                ))}
+              </Bar>
             </BarChart>
           ) : (
-            <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+            <BarChart key={filterKey} data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="x"
@@ -866,7 +949,19 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
                 cursor={false}
                 content={<ChartTooltipContent formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), yCol]} />}
               />
-              <Bar dataKey="y" fill="var(--color-y)" radius={[4, 4, 0, 0]} maxBarSize={48} animationBegin={0} />
+              <Bar
+                dataKey="y"
+                fill="var(--color-y)"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={48}
+                animationBegin={0}
+                cursor={!isPreview && xColInfo && xColInfo.type !== "date" ? "pointer" : undefined}
+                onClick={!isPreview && xColInfo && xColInfo.type !== "date" ? (d: unknown) => { const v = (d as { payload?: { x?: string } })?.payload?.x; if (v) setFilter(xColInfo.name, v) } : undefined}
+              >
+                {xColInfo && filters[xColInfo.name] && data.map((entry, i) => (
+                  <Cell key={i} fill="var(--color-y)" fillOpacity={filters[xColInfo!.name] === entry.x ? 1 : 0.35} />
+                ))}
+              </Bar>
             </BarChart>
           )}
         </ChartContainer>
@@ -885,6 +980,7 @@ function LineCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
   const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, showLabels = false, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo  = columns.find(c => c.name === xCol)
@@ -896,15 +992,17 @@ function LineCard({ item, columns, rows, isPreview }: {
   const usedRows = dateCol && filter && filter !== "all"
     ? filterRows(rows, dateCol, filter, filterFrom, filterTo)
     : rows
+  const filteredRows = applyGlobalFilter(usedRows, columns, filters, dateFrom, dateTo)
 
   const data = xColInfo && yColInfo
     ? yCol2Info
-      ? aggregateByXMulti(usedRows, xColInfo, yColInfo, yCol2Info, agg)
-      : aggregateByX(usedRows, xColInfo, yColInfo, agg)
+      ? aggregateByXMulti(filteredRows, xColInfo, yColInfo, yCol2Info, agg)
+      : aggregateByX(filteredRows, xColInfo, yColInfo, agg)
     : []
 
   const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
   const curveType = smooth !== false ? "monotone" : "linear"
+  const filterKey = JSON.stringify(filters) + "|" + (dateFrom ?? "") + "|" + (dateTo ?? "")
 
   const chartCfg: ShadChartConfig = {
     y:  { label: yCol,  theme: palette.primary },
@@ -919,7 +1017,7 @@ function LineCard({ item, columns, rows, isPreview }: {
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
-          <LineChart data={data} margin={{ top: showLabels ? 20 : 4, right: 8, bottom: 0, left: 0 }}>
+          <LineChart key={filterKey} data={data} margin={{ top: showLabels ? 20 : 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} />
             <XAxis
               dataKey="x"
@@ -996,6 +1094,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
   const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, stacked = false, showLegend = false, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo  = columns.find(c => c.name === xCol)
@@ -1007,16 +1106,18 @@ function AreaCard({ item, columns, rows, isPreview }: {
   const usedRows = dateCol && filter && filter !== "all"
     ? filterRows(rows, dateCol, filter, filterFrom, filterTo)
     : rows
+  const filteredRows = applyGlobalFilter(usedRows, columns, filters, dateFrom, dateTo)
 
   const data = xColInfo && yColInfo
     ? yCol2Info
-      ? aggregateByXMulti(usedRows, xColInfo, yColInfo, yCol2Info, agg)
-      : aggregateByX(usedRows, xColInfo, yColInfo, agg)
+      ? aggregateByXMulti(filteredRows, xColInfo, yColInfo, yCol2Info, agg)
+      : aggregateByX(filteredRows, xColInfo, yColInfo, agg)
     : []
 
   const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
   const curveType = smooth !== false ? "monotone" : "linear"
   const uid = item.id
+  const filterKey = JSON.stringify(filters) + "|" + (dateFrom ?? "") + "|" + (dateTo ?? "")
 
   const chartCfg: ShadChartConfig = {
     y:  { label: yCol,  theme: palette.primary },
@@ -1031,7 +1132,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
-          <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <AreaChart key={filterKey} data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id={`gy-${uid}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%"  stopColor="var(--color-y)" stopOpacity={0.25} />
@@ -1101,12 +1202,16 @@ function PieCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
+  const { filters, setFilter, dateFrom, dateTo } = useContext(FilterContext)
   const { title, xCol, yCol, agg, showCenter = true, showLegend = true, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo = columns.find(c => c.name === xCol)
   const yColInfo = columns.find(c => c.name === yCol)
 
-  const raw = xColInfo && yColInfo ? aggregateByX(rows, xColInfo, yColInfo, agg) : []
+  // Exclude this pie's own xCol slicer when computing slices — all slices stay visible
+  // with the selected one highlighted via Cell opacity. This preserves color assignments.
+  const pieFilters = xColInfo ? Object.fromEntries(Object.entries(filters).filter(([k]) => k !== xColInfo.name)) : filters
+  const raw = xColInfo && yColInfo ? aggregateByX(applyGlobalFilter(rows, columns, pieFilters, dateFrom, dateTo), xColInfo, yColInfo, agg) : []
   const data = raw.slice(0, 6).map((d, i) => ({
     name: d.x,
     value: d.y,
@@ -1132,7 +1237,23 @@ function PieCard({ item, columns, rows, isPreview }: {
                 formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), ""]}
               />}
             />
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius="35%" strokeWidth={2} animationBegin={0}>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              innerRadius="35%"
+              strokeWidth={2}
+              animationBegin={0}
+              cursor={!isPreview && xColInfo ? "pointer" : undefined}
+              onClick={!isPreview && xColInfo ? (d: unknown) => setFilter(xColInfo.name, (d as { name?: string })?.name ?? null) : undefined}
+            >
+              {data.map((entry, i) => (
+                <Cell
+                  key={entry.name}
+                  fill={entry.fill}
+                  fillOpacity={!filters[xCol] || filters[xCol] === entry.name ? 1 : 0.35}
+                />
+              ))}
               {showCenter && (
                 <PieLabel
                   content={({ viewBox }) => {
@@ -1181,13 +1302,15 @@ function TableCard({ item, columns, rows }: {
   rows: string[][]
 }) {
   if (!item.table) return null
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
   const { title, cols, filter, filterFrom, filterTo, filterLabel } = item.table
 
   const dateCol = columns.find(c => c.type === "date")
   const usedRows = dateCol && filter && filter !== "all"
     ? filterRows(rows, dateCol, filter, filterFrom, filterTo)
     : rows
-  const displayRows = usedRows.slice(0, 100)
+  const filteredRows = applyGlobalFilter(usedRows, columns, filters, dateFrom, dateTo)
+  const displayRows = filteredRows.slice(0, 100)
 
   const colInfos = cols
     .map(name => columns.find(c => c.name === name))
@@ -1225,9 +1348,9 @@ function TableCard({ item, columns, rows }: {
           </TableBody>
         </Table>
       </CardContent>
-      {usedRows.length > 100 && (
+      {filteredRows.length > 100 && (
         <div className="px-4 py-2 shrink-0 border-t text-xs text-muted-foreground">
-          Showing 100 of {usedRows.length} rows
+          Showing 100 of {filteredRows.length} rows
         </div>
       )}
     </Card>
@@ -1387,6 +1510,239 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
   prev.projectedY === next.projectedY
 )
 
+// ─── DateRangeSlider ──────────────────────────────────────────────────────────
+
+function DateRangeSlider({ minMs, maxMs, fromMs, toMs, onChange, accentColor }: {
+  minMs: number; maxMs: number
+  fromMs: number; toMs: number
+  onChange: (from: number, to: number) => void
+  accentColor: string
+}) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const span = maxMs - minMs
+  if (span === 0) return null
+
+  const fromPct = ((fromMs - minMs) / span) * 100
+  const toPct   = ((toMs   - minMs) / span) * 100
+
+  function handleDrag(which: "from" | "to") {
+    return (e: React.MouseEvent) => {
+      e.preventDefault(); e.stopPropagation()
+      const onMove = (ev: MouseEvent) => {
+        const rect = trackRef.current!.getBoundingClientRect()
+        const pct  = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100))
+        const ms   = minMs + (pct / 100) * span
+        const DAY  = 86_400_000
+        if (which === "from") onChange(Math.min(ms, toMs - DAY), toMs)
+        else                  onChange(fromMs, Math.max(ms, fromMs + DAY))
+      }
+      const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp) }
+      document.addEventListener("mousemove", onMove)
+      document.addEventListener("mouseup", onUp)
+    }
+  }
+
+  const fmt = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+
+  return (
+    <div className="flex flex-col gap-2 select-none">
+      {/* selected range labels */}
+      <div className="flex justify-between text-xs font-medium">
+        <span>{fmt(fromMs)}</span>
+        <span>{fmt(toMs)}</span>
+      </div>
+
+      {/* track */}
+      <div ref={trackRef} className="relative h-1.5 rounded-full mx-2" style={{ background: "var(--border)" }}>
+        {/* filled range */}
+        <div className="absolute h-full rounded-full" style={{ left: `${fromPct}%`, right: `${100 - toPct}%`, background: accentColor, opacity: 0.5 }} />
+        {/* from handle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full bg-background shadow-md cursor-grab active:cursor-grabbing"
+          style={{ left: `${fromPct}%`, border: `2px solid ${accentColor}` }}
+          onMouseDown={handleDrag("from")}
+        />
+        {/* to handle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full bg-background shadow-md cursor-grab active:cursor-grabbing"
+          style={{ left: `${toPct}%`, border: `2px solid ${accentColor}` }}
+          onMouseDown={handleDrag("to")}
+        />
+      </div>
+
+      {/* dataset bounds */}
+      <div className="flex justify-between text-[10px] text-muted-foreground mx-2">
+        <span>{fmt(minMs)}</span>
+        <span>{fmt(maxMs)}</span>
+      </div>
+    </div>
+  )
+}
+
+// ─── FilterPanel ──────────────────────────────────────────────────────────────
+
+function FilterPanel({ columns, rows, open, onClose }: {
+  columns: ColumnInfo[]
+  rows: string[][]
+  open: boolean
+  onClose: () => void
+}) {
+  const { filters, setFilter, clearAll, dateFrom, dateTo, setDateRange } = useContext(FilterContext)
+  const palette = useContext(PaletteContext)
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+  )
+  useEffect(() => {
+    const obs = new MutationObserver(() => setIsDark(document.documentElement.classList.contains("dark")))
+    obs.observe(document.documentElement, { attributeFilter: ["class"] })
+    return () => obs.disconnect()
+  }, [])
+
+  const accentColor = isDark ? palette.primary.dark : palette.primary.light
+
+  const dateCol = columns.find(c => c.type === "date")
+  const catCols = columns.filter(c => {
+    if (c.type !== "category" && c.type !== "text") return false
+    const uniq = new Set(rows.map(r => r[c.index] ?? "").filter(Boolean))
+    return uniq.size >= 2 && uniq.size <= 100
+  })
+
+  // Compute dataset date bounds
+  const dateTimestamps = dateCol
+    ? rows.map(r => new Date(r[dateCol.index] ?? "").getTime()).filter(t => !isNaN(t))
+    : []
+  const minMs = dateTimestamps.length ? Math.min(...dateTimestamps) : Date.now() - 86_400_000 * 365
+  const maxMs = dateTimestamps.length ? Math.max(...dateTimestamps) : Date.now()
+
+  const fromMs = dateFrom ? new Date(dateFrom).getTime() : minMs
+  const toMs   = dateTo   ? new Date(dateTo).getTime()   : maxMs
+
+  const toIso = (ms: number) => new Date(ms).toISOString().split("T")[0]!
+
+  // Quick preset pills relative to data max date
+  const presets = [
+    { label: "All",  from: minMs,              to: maxMs },
+    { label: "7D",   from: maxMs - 7*86400000, to: maxMs },
+    { label: "30D",  from: maxMs - 30*86400000, to: maxMs },
+    { label: "3M",   from: maxMs - 90*86400000, to: maxMs },
+    { label: "YTD",  from: new Date(new Date(maxMs).getFullYear(), 0, 1).getTime(), to: maxMs },
+    { label: "1Y",   from: maxMs - 365*86400000, to: maxMs },
+  ]
+
+  const isAllTime = !dateFrom && !dateTo
+  const activeCount = Object.keys(filters).length + (isAllTime ? 0 : 1)
+
+  function applyPreset(p: { from: number; to: number; label: string }) {
+    if (p.label === "All") setDateRange(null, null)
+    else setDateRange(toIso(p.from), toIso(p.to))
+  }
+
+  function isPresetActive(p: { from: number; to: number; label: string }) {
+    if (p.label === "All") return isAllTime
+    return Math.abs(fromMs - p.from) < 86_400_000 && Math.abs(toMs - p.to) < 86_400_000
+  }
+
+  return (
+    <div
+      className={`absolute top-14 right-3 z-40 w-72 bg-background border border-border rounded-xl shadow-2xl flex flex-col transition-all duration-200 ease-out origin-top-right ${open ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"}`}
+      style={{ maxHeight: "min(520px, calc(100vh - 80px))" }}
+      onMouseDown={e => e.stopPropagation()}
+    >
+      {/* header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <span className="text-sm font-semibold">Filters</span>
+        {activeCount > 0 && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: accentColor, color: isDark ? "oklch(0.15 0 0)" : "oklch(0.98 0 0)" }}>
+            {activeCount} active
+          </span>
+        )}
+      </div>
+
+      {/* scrollable body */}
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 min-h-0">
+        {/* ── date range slider ── */}
+        {dateCol && dateTimestamps.length > 1 && (
+          <div className="flex flex-col gap-3">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Date range</span>
+
+            {/* preset pills */}
+            <div className="flex flex-wrap gap-1.5">
+              {presets.map(p => {
+                const active = isPresetActive(p)
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => applyPreset(p)}
+                    className="h-6 px-2.5 rounded-full text-[11px] font-medium transition-colors"
+                    style={active
+                      ? { background: accentColor, color: isDark ? "oklch(0.15 0 0)" : "oklch(0.98 0 0)", border: "none" }
+                      : { border: "1px solid var(--border)", color: "var(--muted-foreground)", background: "transparent" }
+                    }
+                  >
+                    {p.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* slider */}
+            <DateRangeSlider
+              minMs={minMs} maxMs={maxMs}
+              fromMs={fromMs} toMs={toMs}
+              accentColor={accentColor}
+              onChange={(f, t) => setDateRange(toIso(f), toIso(t))}
+            />
+          </div>
+        )}
+
+        {/* ── categorical slicers ── */}
+        {catCols.map(col => {
+          const vals = [...new Set(rows.map(r => r[col.index] ?? "").filter(Boolean))].sort()
+          const active = filters[col.name]
+          return (
+            <div key={col.name}>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">{col.name}</label>
+              <select
+                value={active ?? ""}
+                onChange={e => setFilter(col.name, e.target.value || null)}
+                className="w-full h-8 rounded-md border border-border bg-background text-sm px-2 cursor-pointer outline-none appearance-none"
+              >
+                <option value="">All</option>
+                {vals.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          )
+        })}
+
+        {!dateCol && catCols.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-4">No filterable columns found.</p>
+        )}
+      </div>
+
+      {/* footer — always visible */}
+      <div className="flex gap-2 p-3 border-t border-border shrink-0">
+        <button
+          type="button"
+          onClick={clearAll}
+          disabled={activeCount === 0}
+          className="flex-1 h-8 rounded-lg border border-border text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-muted"
+        >
+          Clear all
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex-1 h-8 rounded-lg text-xs font-medium transition-colors"
+          style={{ background: accentColor, color: isDark ? "oklch(0.15 0 0)" : "oklch(0.98 0 0)" }}
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── DashboardGrid ────────────────────────────────────────────────────────────
 
 export function DashboardGrid({ columns = [], rows = [], paletteId, customColor, sheetUrl, initialLayout, initialLayoutFn, generationError }: {
@@ -1418,6 +1774,24 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   const copiedTileRef = useRef<LayoutItem | null>(null)
   const selectedIdRef = useRef<string | null>(null)
   const isResizingRef = useRef(false)
+
+  const [slicerFilters, setSlicerFilters] = useState<SlicerFilters>({})
+  const [globalDateFrom, setGlobalDateFrom] = useState<string | null>(null)
+  const [globalDateTo,   setGlobalDateTo]   = useState<string | null>(null)
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false)
+  const setFilter = useCallback((col: string, val: string | null) => {
+    setSlicerFilters(prev => {
+      if (!val || prev[col] === val) {
+        const { [col]: _removed, ...rest } = prev
+        return rest
+      }
+      return { ...prev, [col]: val }
+    })
+  }, [])
+  const setDateRange = useCallback((from: string | null, to: string | null) => {
+    setGlobalDateFrom(from); setGlobalDateTo(to)
+  }, [])
+  const clearAllFilters = useCallback(() => { setSlicerFilters({}); setGlobalDateFrom(null); setGlobalDateTo(null) }, [])
 
   const columnsRef = useRef(columns)
   const rowsRef    = useRef(rows)
@@ -1970,7 +2344,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setSelectedId(null); setEditingTextId(null); return }
+      if (e.key === "Escape") { setSelectedId(null); setEditingTextId(null); clearAllFilters(); return }
       // Don't intercept shortcuts while the user is typing in a form field
       const tag = (e.target as HTMLElement).tagName
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement).isContentEditable) return
@@ -2004,7 +2378,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [canvasW, pushHistory])
+  }, [canvasW, pushHistory, clearAllFilters])
 
   const handleDelete = useCallback((id: string) => {
     pushHistory()
@@ -2233,6 +2607,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
   return (
     <PaletteContext.Provider value={palette}>
+      <FilterContext.Provider value={{ filters: slicerFilters, setFilter, clearAll: clearAllFilters, dateFrom: globalDateFrom, dateTo: globalDateTo, setDateRange }}>
       {/* ── stat card config dialog ── */}
       <Dialog open={pendingPos !== null || editingId !== null} onOpenChange={open => { if (!open) { setPendingPos(null); setEditingId(null); setShowDatePicker(false); setDatePickerPos(null) } }}>
         <DialogContent className="sm:max-w-md">
@@ -2786,7 +3161,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                 : item.type === "table"
                 ? <TableCard item={item} columns={columns} rows={rows} />
                 : item.type === "stat"
-                ? <StatCard item={item} />
+                ? <StatCard item={item} columns={columns} rows={rows} />
                 : item.chart?.type === "line"
                   ? <LineCard item={item} columns={columns} rows={rows} />
                   : item.chart?.type === "area"
@@ -2806,6 +3181,37 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
             </GridItem>
           ))}
         </div>{/* canvas */}
+
+        {/* filter toggle button — top-right, palette-coloured border */}
+        {(() => {
+          const accentColor = isDark ? palette.primary.dark : palette.primary.light
+          const activeFilterCount = Object.keys(slicerFilters).length + (globalDateFrom ? 1 : 0)
+          return (
+            <button
+              type="button"
+              onMouseDown={e => e.stopPropagation()}
+              onClick={() => setFilterPanelOpen(v => !v)}
+              className="absolute top-3 right-3 z-50 flex items-center gap-1.5 h-8 px-3 rounded-lg bg-background/95 shadow-md text-xs transition-colors select-none"
+              style={{ border: `1.5px solid ${accentColor}`, color: accentColor }}
+            >
+              <SlidersHorizontalIcon className="size-3.5" />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="ml-0.5 min-w-[16px] h-4 rounded-full text-[10px] flex items-center justify-center px-1 font-medium" style={{ background: accentColor, color: isDark ? "oklch(0.15 0 0)" : "oklch(0.98 0 0)" }}>
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          )
+        })()}
+
+        {/* click-outside backdrop for filter panel */}
+        {filterPanelOpen && (
+          <div className="absolute inset-0 z-30" onMouseDown={() => setFilterPanelOpen(false)} />
+        )}
+
+        {/* floating filter popup */}
+        <FilterPanel columns={columns} rows={rows} open={filterPanelOpen} onClose={() => setFilterPanelOpen(false)} />
 
         {/* zoom controls */}
         <div className="absolute bottom-4 right-4 z-50 flex items-center gap-1.5 bg-background/90 backdrop-blur-sm border border-border rounded-lg shadow-md px-2 py-1">
@@ -2897,6 +3303,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         document.body
       )}
 
+      </FilterContext.Provider>
     </PaletteContext.Provider>
   )
 }
