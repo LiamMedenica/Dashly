@@ -26,7 +26,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Calendar } from "@workspace/ui/components/calendar"
 import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/native-select"
-import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon } from "lucide-react"
+import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
 import { toast } from "sonner"
@@ -310,8 +310,8 @@ function resolveCollision(
 
   if (free(tx, ty)) return { x: tx, y: ty }
 
-  const c = others.find(o => rectOverlaps(tx, ty, w, h, o.x, o.y, o.w, o.h))
-  if (!c) return { x: tx, y: ty }
+  const c = others.find(o => rectOverlaps(tx, ty, w, h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
+  if (!c) return allowFallback ? { x: tx, y: ty } : null
 
   const baseCandidates = [
     { x: snapTo(c.x + c.w + SNAP), y: ty },
@@ -337,16 +337,152 @@ function buildLayout(_cw: number): LayoutItem[] {
   return []
 }
 
+// ── cascade collision resolver ─────────────────────────────────────────────────
+
+// Commit-time overlap check — enforces 1-SNAP gap between all tiles.
+function tilesOverlap(a: LayoutItem, b: LayoutItem): boolean {
+  return rectOverlaps(
+    a.x - SNAP, a.y - SNAP, a.w + SNAP * 2, a.h + SNAP * 2,
+    b.x, b.y, b.w, b.h
+  )
+}
+
+// Preview overlap check — cascade triggers only when overlap exceeds 40% of the smaller
+// tile's dimension on both axes. A KPI barely clipping a chart corner won't move it,
+// but dragging either tile 40%+ into the other will.
+function tileShouldYield(item: LayoutItem, blocker: LayoutItem): boolean {
+  const ox = Math.min(item.x + item.w, blocker.x + blocker.w) - Math.max(item.x, blocker.x)
+  const oy = Math.min(item.y + item.h, blocker.y + blocker.h) - Math.max(item.y, blocker.y)
+  if (ox <= 0 || oy <= 0) return false
+  return ox > Math.min(item.w, blocker.w) * 0.4 && oy > Math.min(item.h, blocker.h) * 0.4
+}
+
+// On success returns the fully-resolved layout.
+// Returns null if the drop must be rejected (a tile is cornered with no clean escape),
+// so the dragged tile bounces back rather than anything teleporting.
+function computeCascade(
+  layout: LayoutItem[],
+  dragId: string,
+  dragX: number,
+  dragY: number,
+  canvasW: number,
+  preview = false,
+): LayoutItem[] | null {
+  const working = layout.map(it =>
+    it.id === dragId ? { ...it, x: dragX, y: dragY } : { ...it }
+  )
+  const overlaps = preview ? tileShouldYield : tilesOverlap
+
+  // Moves `item` to snapped (tx, ty), chain-pushing any tiles in the way in the same
+  // direction.  `chain` is a cycle-guard — no tile gets pushed twice in one chain.
+  // Returns false and rolls back all movements if the chain is impossible.
+  function push(item: LayoutItem, tx: number, ty: number, chain: Set<string>): boolean {
+    const sx = snapTo(tx), sy = snapTo(ty)
+    if (sx < SNAP || sx + item.w > canvasW - SNAP || sy < SNAP) return false
+    if (chain.has(item.id)) return false
+    const nextChain = new Set(chain)
+    nextChain.add(item.id)
+
+    const inWay = working.filter(o =>
+      o.id !== item.id &&
+      rectOverlaps(sx - SNAP, sy - SNAP, item.w + SNAP * 2, item.h + SNAP * 2, o.x, o.y, o.w, o.h)
+    )
+    if (inWay.length === 0) { item.x = sx; item.y = sy; return true }
+
+    // Push direction follows this item's movement so the whole chain flows the same way.
+    const dx = sx - item.x, dy = sy - item.y
+    const horizontal = Math.abs(dx) >= Math.abs(dy)
+    const saved = working.map(b => ({ b, x: b.x, y: b.y }))
+
+    const allMoved = inWay.every(b => {
+      // Place b just beyond where item will land, in the same direction.
+      const nx = horizontal ? sx + (dx > 0 ? item.w + SNAP : -(b.w + SNAP)) : b.x
+      const ny = !horizontal ? sy + (dy > 0 ? item.h + SNAP : -(b.h + SNAP)) : b.y
+      return push(b, nx, ny, nextChain)
+    })
+
+    if (allMoved) { item.x = sx; item.y = sy; return true }
+    for (const s of saved) { s.b.x = s.x; s.b.y = s.y }  // rollback
+    return false
+  }
+
+  const maxPasses = preview ? 4 : 20
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let anyMoved = false
+    for (const item of working) {
+      if (item.id === dragId) continue
+      const blocker = working.find(o => o.id !== item.id && overlaps(item, o))
+      if (!blocker) continue
+
+      const ox = Math.min(item.x + item.w, blocker.x + blocker.w) - Math.max(item.x, blocker.x)
+      const oy = Math.min(item.y + item.h, blocker.y + blocker.h) - Math.max(item.y, blocker.y)
+      // Blocker center ≤ item center → blocker is to the left → item escapes right (and vice versa)
+      const goRight = blocker.x + blocker.w / 2 <= item.x + item.w / 2
+
+      const rightX = blocker.x + blocker.w + SNAP
+      const leftX  = blocker.x - item.w  - SNAP
+      const downY  = blocker.y + blocker.h + SNAP
+      const upY    = blocker.y - item.h  - SNAP
+
+      // Same-row tiles try BOTH horizontal directions before falling down.
+      // Cross-row tiles: if the item is BELOW the blocker, try UP first — the blocker
+      // moved down from above, leaving free space above it (swap/bubble-up behaviour).
+      // If the item is above the blocker, go down first (natural push-down).
+      const sameRow  = Math.abs(item.y - blocker.y) < SNAP
+      const preferUp = !sameRow && item.y >= blocker.y   // item below blocker → go up into vacated space
+
+      const primaryV   = { x: item.x, y: preferUp ? upY   : downY }
+      const secondaryV = { x: item.x, y: preferUp ? downY : upY   }
+
+      const candidates = sameRow
+        ? [
+            { x: goRight ? rightX : leftX, y: item.y },   // horizontal — preferred
+            { x: goRight ? leftX : rightX, y: item.y },   // horizontal — other side
+            primaryV,                                        // vertical (last resort)
+            secondaryV,
+          ]
+        : ox <= oy
+          ? [
+              { x: goRight ? rightX : leftX, y: item.y },   // horizontal — primary axis
+              primaryV,
+              { x: goRight ? leftX : rightX, y: item.y },
+              secondaryV,
+            ]
+          : [
+              primaryV,                                        // vertical — primary axis
+              { x: goRight ? rightX : leftX, y: item.y },
+              secondaryV,
+              { x: goRight ? leftX : rightX, y: item.y },
+            ]
+
+      for (const c of candidates) {
+        if (push(item, c.x, c.y, new Set([dragId]))) { anyMoved = true; break }
+      }
+    }
+    if (!anyMoved) break
+  }
+
+  // Commit: reject if any tile remains stuck (no teleportation ever)
+  if (!preview) {
+    for (const item of working) {
+      if (item.id === dragId) continue
+      if (working.some(o => o.id !== item.id && tilesOverlap(item, o))) return null
+    }
+  }
+
+  return working
+}
+
 let cancelActiveDrag: (() => void) | null = null
 
 // ─── ResizeHandles ────────────────────────────────────────────────────────────
 
 const HANDLE = 6
 
-function ResizeHandles({ item, canvasW, scaleRef, onUpdate, onResizeStart, onResizeEnd }: {
+function ResizeHandles({ item, canvasW, viewportRef, onUpdate, onResizeStart, onResizeEnd }: {
   item: LayoutItem
   canvasW: number
-  scaleRef: React.MutableRefObject<number>
+  viewportRef: React.MutableRefObject<{ panX: number; panY: number; scale: number }>
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
   onResizeStart?: () => void
   onResizeEnd?: () => void
@@ -356,7 +492,7 @@ function ResizeHandles({ item, canvasW, scaleRef, onUpdate, onResizeStart, onRes
       e.stopPropagation(); e.preventDefault()
       const sx = e.clientX, sy = e.clientY
       onResizeStart?.()
-      function onMove(ev: MouseEvent) { onUpdate(item.id, getMove((ev.clientX - sx) / scaleRef.current, (ev.clientY - sy) / scaleRef.current)) }
+      function onMove(ev: MouseEvent) { onUpdate(item.id, getMove((ev.clientX - sx) / viewportRef.current.scale, (ev.clientY - sy) / viewportRef.current.scale)) }
       function onUp() {
         document.removeEventListener("mousemove", onMove)
         document.removeEventListener("mouseup",   onUp)
@@ -891,27 +1027,32 @@ function TableCard({ item, columns, rows }: {
 
 // ─── GridItem ─────────────────────────────────────────────────────────────────
 
-function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onEdit, onDuplicate, onDelete, children }: {
+const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onDragMove, onEdit, onDuplicate, onDelete, onResizeEnd, projectedX, projectedY, children }: {
   item: LayoutItem
   canvasW: number
-  scaleRef: React.MutableRefObject<number>
+  viewportRef: React.MutableRefObject<{ panX: number; panY: number; scale: number }>
   isSelected: boolean
   onSelect: () => void
   onUpdate: (id: string, patch: Partial<LayoutItem>) => void
   onDragStart: () => void
   onDragEnd: () => void
+  onDragMove: (id: string, x: number, y: number) => void
   onEdit: () => void
   onDuplicate: () => void
   onDelete: () => void
+  onResizeEnd?: () => void
+  projectedX?: number
+  projectedY?: number
   children: React.ReactNode
 }) {
   const [live,       setLive]       = useState<{ x: number; y: number } | null>(null)
   const [ghost,      setGhost]      = useState<{ x: number; y: number } | null>(null)
   const [isResizing, setIsResizing] = useState(false)
+  const prevSnapRef = useRef({ x: item.x, y: item.y })
 
   const isDragging = live !== null
-  const dispX = live?.x ?? item.x
-  const dispY = live?.y ?? item.y
+  const dispX = live?.x ?? (projectedX ?? item.x)
+  const dispY = live?.y ?? (projectedY ?? item.y)
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -922,16 +1063,29 @@ function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onD
     const sx = e.clientX, sy = e.clientY
     const bx = item.x,    by = item.y
     let moved = false, snapX = bx, snapY = by
+    prevSnapRef.current = { x: bx, y: by }
+
+    // Capture the canvas-space offset of the mouse within the tile at drag start
+    // so the tile stays anchored under the cursor even if pan/zoom changes mid-drag.
+    const { panX: panX0, panY: panY0, scale: scale0 } = viewportRef.current
+    const anchorX = (sx - panX0) / scale0 - bx
+    const anchorY = (sy - panY0) / scale0 - by
 
     function onMove(ev: MouseEvent) {
       const dx = ev.clientX - sx, dy = ev.clientY - sy
       if (!moved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) { moved = true; onDragStart(); onSelect() }
       if (!moved) return
-      const rx = bx + dx / scaleRef.current, ry = by + dy / scaleRef.current
+      const { panX, panY, scale } = viewportRef.current
+      const rx = (ev.clientX - panX) / scale - anchorX
+      const ry = (ev.clientY - panY) / scale - anchorY
       setLive({ x: rubberBand(rx, minX, maxX), y: ry < minY ? minY - (minY - ry) * 0.25 : ry })
       snapX = clamp(snapTo(rx), minX, maxX)
       snapY = Math.max(minY, snapTo(ry))
       setGhost({ x: snapX, y: snapY })
+      if (snapX !== prevSnapRef.current.x || snapY !== prevSnapRef.current.y) {
+        prevSnapRef.current = { x: snapX, y: snapY }
+        onDragMove(item.id, snapX, snapY)
+      }
     }
 
     function detach() {
@@ -950,7 +1104,7 @@ function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onD
 
     document.addEventListener("mousemove", onMove)
     document.addEventListener("mouseup",   onUp)
-  }, [item, canvasW, onUpdate, onDragStart, onDragEnd, onSelect])
+  }, [item, canvasW, onUpdate, onDragStart, onDragEnd, onDragMove, onSelect])
 
   return (
     <>
@@ -966,7 +1120,7 @@ function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onD
           transition: (isDragging || isResizing) ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
         }}
         onMouseDown={onMouseDown}
-        onContextMenu={e => { e.preventDefault(); onSelect() }}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }}
       >
         <div
           className="w-full h-full rounded-xl"
@@ -976,10 +1130,10 @@ function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onD
           <ResizeHandles
             item={item}
             canvasW={canvasW}
-            scaleRef={scaleRef}
+            viewportRef={viewportRef}
             onUpdate={onUpdate}
             onResizeStart={() => setIsResizing(true)}
-            onResizeEnd={() => setIsResizing(false)}
+            onResizeEnd={() => { setIsResizing(false); onResizeEnd?.() }}
           />
         )}
 
@@ -1016,7 +1170,12 @@ function GridItem({ item, canvasW, scaleRef, isSelected, onSelect, onUpdate, onD
       </div>
     </>
   )
-}
+}, (prev, next) =>
+  prev.item === next.item &&
+  prev.isSelected === next.isSelected &&
+  prev.projectedX === next.projectedX &&
+  prev.projectedY === next.projectedY
+)
 
 // ─── DashboardGrid ────────────────────────────────────────────────────────────
 
@@ -1042,13 +1201,25 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   const [layout,   setLayout]   = useState<LayoutItem[]>(initialLayout ?? [])
   const [dragging, setDragging] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number } | null>(null)
+  const [dragProjection, setDragProjection] = useState<Map<string, { x: number; y: number }> | null>(null)
+  const dragRafRef    = useRef<number | null>(null)
+  const historyRef    = useRef<LayoutItem[][]>([])
+  const copiedTileRef = useRef<LayoutItem | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
+  const isResizingRef = useRef(false)
 
   const columnsRef = useRef(columns)
   const rowsRef    = useRef(rows)
   const layoutRef  = useRef(layout)
-  columnsRef.current = columns
-  rowsRef.current    = rows
-  layoutRef.current  = layout
+  columnsRef.current  = columns
+  rowsRef.current     = rows
+  layoutRef.current   = layout
+  selectedIdRef.current = selectedId
+
+  const pushHistory = useCallback(() => {
+    historyRef.current = [...historyRef.current.slice(-49), layoutRef.current]
+  }, [])
 
   const applyTransform = useCallback(() => {
     const { panX, panY, scale } = viewportRef.current
@@ -1060,6 +1231,8 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       zoomLabelRef.current.textContent = `${Math.round(scale * 100)}%`
     }
   }, [])
+
+  // ── viewport controls ────────────────────────────────────────────────────────
 
   const fitToWindow = useCallback(() => {
     const outer = outerRef.current
@@ -1074,7 +1247,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     const outer = outerRef.current
     if (!outer) return
     const { panX, panY, scale } = viewportRef.current
-    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor))
+    const newScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE)
     const cx = outer.clientWidth / 2, cy = outer.clientHeight / 2
     viewportRef.current = {
       panX: cx - (cx - panX) * (newScale / scale),
@@ -1084,7 +1257,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     applyTransform()
   }, [applyTransform])
 
-  const onCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+  const onPanStart = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
     setSelectedId(null)
     const outer = outerRef.current
@@ -1113,6 +1286,17 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     document.addEventListener('mouseup', onUp)
   }, [applyTransform])
 
+  // Only start panning when the click lands on the outer viewport itself (the gray
+  // gutter), not when it bubbles up from the canvas or zoom controls.
+  const onGutterMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onPanStart(e)
+  }, [onPanStart])
+
+  const onViewportContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setCanvasMenu({ x: e.clientX, y: e.clientY })
+  }, [])
+
   useIsomorphicLayoutEffect(() => {
     const outer = outerRef.current
     if (!outer) return
@@ -1131,15 +1315,27 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     function onWheel(e: WheelEvent) {
       e.preventDefault()
       const { panX, panY, scale } = viewportRef.current
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
-      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor))
-      const rect = outer.getBoundingClientRect()
-      const cx = e.clientX - rect.left
-      const cy = e.clientY - rect.top
-      viewportRef.current = {
-        panX: cx - (cx - panX) * (newScale / scale),
-        panY: cy - (cy - panY) * (newScale / scale),
-        scale: newScale,
+      const overCanvas = canvasRef.current?.contains(e.target as Node) ?? false
+
+      if (!e.ctrlKey && overCanvas) {
+        // Scroll on the canvas → pan
+        viewportRef.current = {
+          ...viewportRef.current,
+          panX: panX - e.deltaX,
+          panY: panY - e.deltaY,
+        }
+      } else {
+        // Scroll on the gutter, or pinch-to-zoom anywhere → zoom toward cursor
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+        const newScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE)
+        const rect = outer.getBoundingClientRect()
+        const cx = e.clientX - rect.left
+        const cy = e.clientY - rect.top
+        viewportRef.current = {
+          panX: cx - (cx - panX) * (newScale / scale),
+          panY: cy - (cy - panY) * (newScale / scale),
+          scale: newScale,
+        }
       }
       applyTransform()
     }
@@ -1182,68 +1378,118 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     if (generationError) toast.error(generationError)
   }, [generationError])
 
+  // ── close canvas context menu on Escape ──
+  useEffect(() => {
+    if (!canvasMenu) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCanvasMenu(null) }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [canvasMenu])
+
   // ── collision-aware move ──
-  const onUpdate = useCallback((id: string, patch: Partial<LayoutItem>) =>
+  const onUpdate = useCallback((id: string, patch: Partial<LayoutItem>) => {
+    if ('x' in patch && 'y' in patch && !('w' in patch) && !('h' in patch)) {
+      // Drag drop — push history once per drop
+      pushHistory()
+    } else if (('w' in patch || 'h' in patch) && !isResizingRef.current) {
+      // First resize event of this gesture — push history once
+      isResizingRef.current = true
+      pushHistory()
+    }
     setLayout(prev => {
       const item = prev.find(it => it.id === id)!
       const next = { ...item, ...patch }
-
       if ('x' in patch && 'y' in patch && !('w' in patch) && !('h' in patch)) {
-        const layout = prev.map(it => it.id === id ? next : it)
-        const c = layout.find(it =>
-          it.id !== id &&
-          rectOverlaps(next.x, next.y, next.w, next.h, it.x - SNAP, it.y - SNAP, it.w + SNAP * 2, it.h + SNAP * 2)
-        )
-        if (!c) return layout
-
-        // Use minimum-overlap axis to decide escape direction — more accurate than
-        // center-to-center vector when tiles have very different sizes.
-        const overlapX = Math.min(next.x + next.w, c.x + c.w) - Math.max(next.x, c.x)
-        const overlapY = Math.min(next.y + next.h, c.y + c.h) - Math.max(next.y, c.y)
-        const bCX = next.x + next.w / 2, bCY = next.y + next.h / 2
-        const cCX = c.x + c.w / 2,       cCY = c.y + c.h / 2
-
-        let ex = c.x, ey = c.y
-        if (overlapX <= overlapY) {
-          ex = cCX > bCX ? snapTo(next.x + next.w + SNAP) : snapTo(next.x - c.w - SNAP)
-        } else {
-          ey = cCY > bCY ? snapTo(next.y + next.h + SNAP) : snapTo(next.y - c.h - SNAP)
+        const others = prev.filter(it => it.id !== id)
+        // ≥40% penetration on both axes → try to cascade; if any tile is cornered, bounce back
+        if (others.some(o => tileShouldYield(next, o))) {
+          return computeCascade(prev, id, next.x, next.y, canvasW) ?? prev
         }
-
-        const cOthers = layout.filter(it => it.id !== c.id)
-        const cFree =
-          ex >= SNAP && ex + c.w <= canvasW - SNAP && ey >= SNAP &&
-          !cOthers.some(o => rectOverlaps(ex, ey, c.w, c.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
-
-        // C can slide out of the way — B lands at target, C moves to its escape spot.
-        if (cFree) return layout.map(it => it.id === c.id ? { ...it, x: ex, y: ey } : it)
-
-        // C is blocked — find the closest free spot for B adjacent to C instead.
-        const bCandidates = [
-          { x: snapTo(c.x + c.w + SNAP), y: next.y },
-          { x: snapTo(c.x - next.w - SNAP), y: next.y },
-          { x: next.x, y: snapTo(c.y + c.h + SNAP) },
-          { x: next.x, y: snapTo(c.y - next.h - SNAP) },
-        ]
-        const bOthers = layout.filter(it => it.id !== id)
-        const bSnap = bCandidates
-          .filter(p =>
-            p.x >= SNAP && p.x + next.w <= canvasW - SNAP && p.y >= SNAP &&
-            !bOthers.some(o => rectOverlaps(p.x, p.y, next.w, next.h, o.x - SNAP, o.y - SNAP, o.w + SNAP * 2, o.h + SNAP * 2))
-          )
-          .sort((a, b) => Math.hypot(a.x - next.x, a.y - next.y) - Math.hypot(b.x - next.x, b.y - next.y))[0]
-
-        if (bSnap) return layout.map(it => it.id === id ? { ...it, x: bSnap.x, y: bSnap.y } : it)
-
-        // No space anywhere near C — revert B to its last committed position.
-        return prev.map(it => it.id === id ? { ...it, x: item.x, y: item.y } : it)
+        // SNAP-gap violation but <40% penetration → snap adjacent only for a small tile against a single larger blocker
+        if (others.some(o => tilesOverlap(next, o))) {
+          const overlapping = others.filter(o => tilesOverlap(next, o))
+          if (overlapping.length === 1 && next.w * next.h <= overlapping[0]!.w * overlapping[0]!.h) {
+            const pos = resolveCollision(id, next.x, next.y, next.w, next.h, prev, canvasW, false)
+            if (pos) return prev.map(it => it.id === id ? { ...it, x: pos.x, y: pos.y } : it)
+          }
+          return prev
+        }
+        // Completely clear → place freely
+        return prev.map(it => it.id === id ? { ...it, x: next.x, y: next.y } : it)
       }
-
+      // Resize: block if it would overlap another tile (enforces 1-SNAP gap during resize)
+      const resizeOthers = prev.filter(it => it.id !== id)
+      if (resizeOthers.some(o => tilesOverlap(next, o))) return prev
       return prev.map(it => it.id === id ? next : it)
-    }), [canvasW])
+    })
+    if ('x' in patch) setDragProjection(null)
+  }, [canvasW, pushHistory])
 
-  const onDragStart = useCallback(() => setDragging(true), [])
-  const onDragEnd   = useCallback(() => { setDragging(false); setSelectedId(null) }, [])
+  const stopAutoPanRef = useRef<(() => void) | null>(null)
+
+  const onDragStart = useCallback(() => {
+    setDragging(true)
+    const outer = outerRef.current
+    if (!outer) return
+
+    let mx = 0, my = 0
+    let rafId: number | null = null
+    const EDGE = 80, SPEED = 14
+
+    function trackMouse(e: MouseEvent) { mx = e.clientX; my = e.clientY }
+
+    function tick() {
+      const rect = outer.getBoundingClientRect()
+      let vx = 0, vy = 0
+      const ld = mx - rect.left, rd = rect.right - mx
+      const td = my - rect.top,  bd = rect.bottom - my
+      if (ld < EDGE && ld >= 0) vx =  SPEED * (1 - ld / EDGE)  // near left  → pan right (canvas moves right, reveals left)
+      if (rd < EDGE && rd >= 0) vx = -SPEED * (1 - rd / EDGE)  // near right → pan left  (canvas moves left, reveals right)
+      if (td < EDGE && td >= 0) vy =  SPEED * (1 - td / EDGE)  // near top   → pan down  (canvas moves down, reveals top)
+      if (bd < EDGE && bd >= 0) vy = -SPEED * (1 - bd / EDGE)  // near bot   → pan up    (canvas moves up, reveals bottom)
+      if (vx !== 0 || vy !== 0) {
+        viewportRef.current.panX += vx
+        viewportRef.current.panY += vy
+        applyTransform()
+        // Re-fire mousemove so the dragged tile re-projects its position against the new panX/panY
+        document.dispatchEvent(new MouseEvent('mousemove', { clientX: mx, clientY: my, bubbles: true, cancelable: true }))
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+
+    document.addEventListener('mousemove', trackMouse)
+    rafId = requestAnimationFrame(tick)
+
+    stopAutoPanRef.current = () => {
+      document.removeEventListener('mousemove', trackMouse)
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      stopAutoPanRef.current = null
+    }
+  }, [applyTransform])
+
+  const onDragEnd = useCallback(() => {
+    setDragging(false)
+    setSelectedId(null)
+    setDragProjection(null)
+    stopAutoPanRef.current?.()
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current)
+      dragRafRef.current = null
+    }
+  }, [])
+
+  const onDragMove = useCallback((id: string, snapX: number, snapY: number) => {
+    if (dragRafRef.current !== null) cancelAnimationFrame(dragRafRef.current)
+    dragRafRef.current = requestAnimationFrame(() => {
+      const projected = computeCascade(layoutRef.current, id, snapX, snapY, canvasW, true)
+      if (projected) {
+        setDragProjection(new Map(
+          projected.filter(it => it.id !== id).map(it => [it.id, { x: it.x, y: it.y }])
+        ))
+      }
+      dragRafRef.current = null
+    })
+  }, [canvasW])
 
   // ── drop ghost (shared between stat and chart drags) ──
   const [dropGhost, setDropGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -1442,16 +1688,50 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   }, [])
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedId(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setSelectedId(null); return }
+      // Don't intercept shortcuts while the user is typing in a form field
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement).isContentEditable) return
+      const ctrl = e.metaKey || e.ctrlKey
+      if (ctrl && e.key === "z") {
+        e.preventDefault()
+        const prev = historyRef.current[historyRef.current.length - 1]
+        if (!prev) return
+        historyRef.current = historyRef.current.slice(0, -1)
+        setLayout(prev)
+      }
+      if (ctrl && e.key === "c") {
+        e.preventDefault()
+        const tile = layoutRef.current.find(it => it.id === selectedIdRef.current)
+        if (tile) copiedTileRef.current = tile
+      }
+      if (ctrl && e.key === "v") {
+        e.preventDefault()
+        const tile = copiedTileRef.current
+        if (!tile) return
+        pushHistory()
+        const newId = `${tile.type}-${Date.now()}`
+        setLayout(prev => {
+          const ox = tile.x + SNAP * 2, oy = tile.y + SNAP * 2
+          const withNew = [...prev, { ...tile, id: newId, x: ox, y: oy }]
+          const pos = resolveCollision(newId, ox, oy, tile.w, tile.h, withNew, canvasW, true) ?? { x: ox, y: oy }
+          return [...prev, { ...tile, id: newId, x: pos.x, y: pos.y }]
+        })
+        setSelectedId(newId)
+      }
+    }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  }, [canvasW, pushHistory])
 
   const handleDelete = useCallback((id: string) => {
+    pushHistory()
     setLayout(prev => prev.filter(it => it.id !== id))
-  }, [])
+  }, [pushHistory])
 
   const handleDuplicate = useCallback((id: string) => {
+    pushHistory()
     setLayout(prev => {
       const item = prev.find(it => it.id === id)
       if (!item) return prev
@@ -1462,7 +1742,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         ?? { x: item.x, y: item.y + item.h + SNAP }
       return [...prev, { ...item, id: newId, x: pos.x, y: pos.y }]
     })
-  }, [])
+  }, [pushHistory])
 
   const handleEdit = useCallback((id: string) => {
     const item = layoutRef.current.find(it => it.id === id)
@@ -1502,6 +1782,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
   const handleConfirm = useCallback(() => {
     if ((!pendingPos && !editingId) || !configCol) return
+    pushHistory()
     const col    = columnsRef.current.find(c => c.name === configCol)
     const dCol   = columnsRef.current.find(c => c.type === "date")
     if (!col) return
@@ -1540,11 +1821,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingPos(null)
     }
-  }, [pendingPos, editingId, configCol, configAgg, configTitle, configFilter, configDateRange, configShowTrend])
+  }, [pendingPos, editingId, configCol, configAgg, configTitle, configFilter, configDateRange, configShowTrend, pushHistory])
 
   const handleChartConfirm = useCallback(() => {
     if (!pendingChartPos && !editingChartId) return
     if (!chartConfigXCol || !chartConfigYCol) return
+    pushHistory()
     const dCol = columnsRef.current.find(c => c.type === "date")
     const ref  = dCol ? dataMaxDate(rowsRef.current, dCol) : null
     const autoTitle = `${AGG_LABELS[chartConfigAgg]} ${chartConfigYCol} by ${chartConfigXCol}`
@@ -1586,11 +1868,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingChartPos(null)
     }
-  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter])
+  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter, pushHistory])
 
   const handleTableConfirm = useCallback(() => {
     if (!pendingTablePos && !editingTableId) return
     if (tableConfigCols.length === 0) return
+    pushHistory()
     const dCol = columnsRef.current.find(c => c.type === "date")
     const ref  = dCol ? dataMaxDate(rowsRef.current, dCol) : null
     const table: TableConfig = {
@@ -1613,7 +1896,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingTablePos(null)
     }
-  }, [pendingTablePos, editingTableId, tableConfigTitle, tableConfigCols, tableConfigFilter])
+  }, [pendingTablePos, editingTableId, tableConfigTitle, tableConfigCols, tableConfigFilter, pushHistory])
 
   // ── derived ──
   const numCols    = columns.filter(c => c.type === "number")
@@ -2024,13 +2307,14 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       </Dialog>
 
       {/* ── canvas viewport ── */}
-      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-muted/60" style={{ cursor: 'grab' }}>
+      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-muted/60" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
         <div
           ref={canvasRef}
           data-dashboard-canvas
           className="absolute top-0 left-0 bg-background shadow-md rounded-xl overflow-hidden"
           style={{ width: LOGICAL_W, height: canvasMinH, transformOrigin: '0 0', willChange: 'transform' }}
-          onMouseDown={onCanvasMouseDown}
+          onMouseDown={onPanStart}
+          onContextMenu={onViewportContextMenu}
         >
           {dragging && <div className="fixed inset-0 z-40 cursor-grabbing" />}
           <div className={`dot-grid pointer-events-none absolute inset-0 transition-opacity duration-500 ${dragging ? "opacity-100" : "opacity-[0.08]"}`} />
@@ -2041,10 +2325,13 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
           {layout.map(item => (
             <GridItem
-              key={item.id} item={item} canvasW={canvasW} scaleRef={scaleRef}
+              key={item.id} item={item} canvasW={canvasW} viewportRef={viewportRef}
+              projectedX={dragProjection?.get(item.id)?.x}
+              projectedY={dragProjection?.get(item.id)?.y}
               isSelected={selectedId === item.id}
               onSelect={() => setSelectedId(item.id)}
-              onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd}
+              onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragMove={onDragMove}
+              onResizeEnd={() => { isResizingRef.current = false }}
               onEdit={() => handleEdit(item.id)}
               onDuplicate={() => { handleDuplicate(item.id); setSelectedId(null) }}
               onDelete={() => { handleDelete(item.id); setSelectedId(null) }}
@@ -2087,6 +2374,61 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
           </Button>
         </div>
       </div>{/* outer viewport */}
+
+      {canvasMenu && createPortal(
+        <>
+          <div className="fixed inset-0 z-[200]" onContextMenu={e => e.preventDefault()} onClick={() => setCanvasMenu(null)} />
+          <div
+            className="fixed z-[201] min-w-[180px] rounded-lg border border-border bg-popover shadow-xl overflow-hidden py-1"
+            style={{ top: canvasMenu.y, left: canvasMenu.x }}
+          >
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors cursor-not-allowed opacity-50"
+              disabled
+            >
+              <SaveIcon className="size-3.5 shrink-0" />
+              Save
+            </button>
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors cursor-not-allowed opacity-50"
+              disabled
+            >
+              <Share2Icon className="size-3.5 shrink-0" />
+              Share
+            </button>
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors cursor-not-allowed opacity-50"
+              disabled
+            >
+              <ImageIcon className="size-3.5 shrink-0" />
+              Export as image
+            </button>
+            <div className="my-1 border-t border-border" />
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+              onClick={() => { fitToWindow(); setCanvasMenu(null) }}
+            >
+              <ScanIcon className="size-3.5 shrink-0" />
+              Fit to window
+            </button>
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+              onClick={() => { doZoom(1.25); setCanvasMenu(null) }}
+            >
+              <ZoomInIcon className="size-3.5 shrink-0" />
+              Zoom in
+            </button>
+            <button
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+              onClick={() => { doZoom(0.8); setCanvasMenu(null) }}
+            >
+              <ZoomOutIcon className="size-3.5 shrink-0" />
+              Zoom out
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
 
       {showDatePicker && datePickerPos && createPortal(
         <>

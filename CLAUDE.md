@@ -1,4 +1,4 @@
-# Dashly
+﻿# Dashly
 
 "Tableau but in 2026" — paste a Google Sheets URL → auto-generate an interactive dashboard → share with team → $9.99/month.
 
@@ -45,11 +45,16 @@ packages/ui/       Shared components (@workspace/ui/*)
 - Fixed overlay `z-40` during drag blocks sidebar hover cards and sets grabbing cursor globally
 - `cancelActiveDrag` module-level ref prevents stuck drags on multi-mousedown
 - **Collision system** — 1-SNAP gap enforced between all items at all times
-  - On drop: compute natural escape direction (vector from B center to C center, dominant axis)
-  - If escape is free → C slides away, B lands where dropped (push/slide)
-  - If escape is blocked (corner/wall) → halfway threshold on B's center inside C's bounds:
-    - B center outside C → bounce B back to origin
-    - B center inside C → swap: B takes C's slot, C resolves to nearest free position
+  - `tilesOverlap(a, b)` — commit-time check, 1-SNAP padding on all sides
+  - `tileShouldYield(item, blocker)` — preview check, requires ≥40% penetration on BOTH axes (threshold is `Math.min(item.w, blocker.w) * 0.4`). Uses the smaller tile's dimension so a large chart won't cascade from a barely-touching KPI, but a KPI dragged 40%+ into a chart still triggers cascade.
+  - `computeCascade(layout, dragId, dragX, dragY, canvasW, preview?)` — returns resolved `LayoutItem[]` or `null` (bounce)
+    - `push(item, tx, ty, chain)` — nested recursive chain-push; moves `item` to (tx,ty), recursively pushing any tiles in the way in the same direction. Saves full `working` snapshot before attempting; rolls back all on failure. Cycle-guarded via `chain: Set<string>`.
+    - **3-branch `onUpdate`**: (1) ≥40% penetration → cascade; (2) SNAP-gap violation only → small tile near single larger blocker snaps adjacent via `resolveCollision`, otherwise bounce to origin; (3) clear → place freely
+    - **Same-row tiles** (`sameRow = |item.y − blocker.y| < SNAP`): try BOTH horizontal directions before falling down — ensures 3-tile horizontal chain-shuffles work even when the preferred side hits the canvas wall
+    - **Cross-row tiles** (`preferUp = item.y >= blocker.y`): if item is below the blocker (blocker moved down from above), try UP first — this gives swap/bubble-up behaviour so KPIs rise into the space a large chart vacated
+    - On `null` return → dragged tile bounces back to origin (no teleportation)
+  - `resolveCollision` — finds nearest free adjacent slot (right/left/below/above the first padded blocker). `allowFallback=false` returns `null` instead of the invalid position when no candidate is free. Blocker detection uses padded `rectOverlaps` (same as `tilesOverlap`) so zero-gap touching tiles are caught.
+  - Live preview during drag: fires per-RAF via `dragRafRef` when snap position changes; sets `dragProjection` Map for ghost rendering. Tiles rearrange on drop (not live), but preview shows likely destination.
 
 **Base UI + drag-drop**: Base UI components intercept drag events. Sidebar draggable items use plain `<div onMouseDown={...}>` dispatching `window.dispatchEvent(new CustomEvent(...))` — never wrapped in SidebarMenuButton or similar. DashboardGrid listens via `window.addEventListener`.
 
@@ -94,8 +99,12 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [x] 8-handle edge/corner resize, bounds-checked
 - [x] Fixed overlay during drag (blocks sidebar hover, enforces grabbing cursor)
 - [x] Collision detection — 1-SNAP gap enforced, items cannot overlap
-- [x] Push/slide: free items slide away via natural escape direction vector
-- [x] Bounce/swap: cornered items bounce B back (<halfway) or swap positions (>halfway)
+- [x] Chain-push cascade: `push()` recursively shifts tiles in the same direction, enabling 3-tile horizontal shuffles
+- [x] Bounce: drop rejected (cascade returns null) → dragged tile snaps back to origin
+- [x] Same-row horizontal priority: tiles in same row always try both horizontal directions before falling down
+- [x] Cross-row preferUp: tiles below a descending drag tile escape upward (swap/bubble-up), not further down
+- [x] Live preview cascade during drag (`dragProjection`) — shows ghost destinations before drop
+- [x] **Ctrl+Z** undo (history stack, up to 50 states), **Ctrl+C / Ctrl+V** copy-paste tiles
 - [x] Right-click context menu on all tile types: Duplicate / Edit / Delete
 - [x] **Stat cards** — drag from sidebar → config dialog (metric, aggregation, period, trend comparison)
   - Period filter system: `FilterPeriod` presets + custom date range (calendar portal)
