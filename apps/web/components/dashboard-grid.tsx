@@ -67,6 +67,15 @@ function parseNum(v: string): number {
   return parseFloat(v.replace(/[$€£¥₹,%\s]/g, "").replace(/,/g, ""))
 }
 
+// Works for both hex (#rrggbb) and oklch(L C H) strings
+function colorAlpha(color: string, alpha: number): string {
+  if (color.startsWith("#")) {
+    const a = Math.round(alpha * 255).toString(16).padStart(2, "0")
+    return color + a
+  }
+  return color.replace(")", ` / ${alpha})`)
+}
+
 function fmtValue(n: number): string {
   if (!isFinite(n)) return "—"
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -274,11 +283,18 @@ type ChartConfig = {
   stacked?: boolean
   showLegend?: boolean
   showCenter?: boolean
+  showTitle?: boolean
+  showDescription?: boolean
+  description?: string
 }
 export type StatConfig = {
   column: string; agg: Agg; label: string; value: string
   filter?: FilterPeriod; filterFrom?: string; filterTo?: string; filterLabel?: string
   trend?: string; trendUp?: boolean; trendLabel?: string
+  showLabel?: boolean
+  showBadge?: boolean
+  showDescription?: boolean
+  description?: string
 }
 export type TableConfig = {
   title: string
@@ -697,33 +713,58 @@ function TextEditDialog({ item, onSave, onClose }: {
 
 function StatCard({ item }: { item: LayoutItem }) {
   if (!item.stat) return null
-  const { label, value, agg, column, filter, filterLabel, trend, trendUp, trendLabel } = item.stat
+  const palette = useContext(PaletteContext)
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+  )
+  useEffect(() => {
+    const obs = new MutationObserver(() =>
+      setIsDark(document.documentElement.classList.contains("dark"))
+    )
+    obs.observe(document.documentElement, { attributeFilter: ["class"] })
+    return () => obs.disconnect()
+  }, [])
+
+  const { label, value, agg, column, filter, filterLabel, trend, trendUp, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
   const TrendIcon = trendUp === false ? TrendingDownIcon : TrendingUpIcon
+  const paletteColor = isDark ? palette.primary.dark : palette.primary.light
+  // Down uses a fixed warm-red oklch chosen to sit between the palette hues (none are at hue 350-5)
+  const downColor = isDark ? "oklch(0.72 0.14 5)" : "oklch(0.52 0.18 5)"
+  const badgeStyle = trendUp === true
+    ? { color: paletteColor, borderColor: colorAlpha(paletteColor, 0.3) }
+    : trendUp === false
+    ? { color: downColor, borderColor: colorAlpha(downColor, 0.3) }
+    : {}
+
   return (
-    <Card className="@container/card h-full bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card">
+    <Card className={`@container/card h-full bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card${!showDescription ? " justify-center" : ""}`}>
       <CardHeader>
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">{value}</CardTitle>
-        {trend && (
+        {showLabel && <CardDescription>{label}</CardDescription>}
+        <CardTitle className={`font-semibold tabular-nums ${showDescription ? "text-2xl @[250px]/card:text-3xl" : "text-3xl @[250px]/card:text-4xl"}`}>{value}</CardTitle>
+        {trend && showBadge && (
           <CardAction>
-            <Badge variant="outline">
+            <Badge variant="outline" style={badgeStyle}>
               <TrendIcon />
               {trend}
             </Badge>
           </CardAction>
         )}
       </CardHeader>
-      <CardFooter className="flex-col items-start gap-1.5 text-sm">
-        <div className="line-clamp-1 flex items-center gap-2 font-medium">
-          {trend
-            ? <>{trendUp ? "Trending up" : "Trending down"} <TrendIcon className="size-4" /> {trendLabel}</>
-            : (filterLabel ?? `${AGG_LABELS[agg]} of ${column}`)}
-        </div>
-        {trend
-          ? filterLabel && <div className="text-muted-foreground">{filterLabel}</div>
-          : <div className="text-muted-foreground">{AGG_LABELS[agg]} of {column}</div>
-        }
-      </CardFooter>
+      {showDescription && (
+        <CardFooter className="flex-col items-start gap-1.5 text-sm">
+          <div className="line-clamp-1 flex items-center gap-2 font-medium">
+            {description
+              ? description
+              : trend
+              ? <>{trendUp ? "Trending up" : "Trending down"} <TrendIcon className="size-4" /> {trendLabel}</>
+              : (filterLabel ?? `${AGG_LABELS[agg]} of ${column}`)}
+          </div>
+          {!description && (trend
+            ? filterLabel && <div className="text-muted-foreground">{filterLabel}</div>
+            : <div className="text-muted-foreground">{AGG_LABELS[agg]} of {column}</div>
+          )}
+        </CardFooter>
+      )}
     </Card>
   )
 }
@@ -739,7 +780,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
-  const { title, xCol, yCol, agg, filter, filterFrom, filterTo, orientation = "vertical" } = item.chart
+  const { title, xCol, yCol, agg, filter, filterFrom, filterTo, orientation = "vertical", showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo = columns.find(c => c.name === xCol)
   const yColInfo = columns.find(c => c.name === yCol)
@@ -763,10 +804,8 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
   return (
     <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
       <CardHeader className="shrink-0">
-        <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>
-        <CardDescription>
-          {filterLabel ?? `${AGG_LABELS[agg]} of ${yCol}`}
-        </CardDescription>
+        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
         <CardAction>
           <button
             onClick={e => { e.stopPropagation(); onToggleOrientation?.() }}
@@ -846,7 +885,7 @@ function LineCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
-  const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, showLabels = false } = item.chart
+  const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, showLabels = false, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo  = columns.find(c => c.name === xCol)
   const yColInfo  = columns.find(c => c.name === yCol)
@@ -875,10 +914,8 @@ function LineCard({ item, columns, rows, isPreview }: {
   return (
     <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
       <CardHeader className="shrink-0">
-        <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>
-        <CardDescription>
-          {filterLabel ?? `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}
-        </CardDescription>
+        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
@@ -959,7 +996,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
-  const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, stacked = false, showLegend = false } = item.chart
+  const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, smooth = true, stacked = false, showLegend = false, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo  = columns.find(c => c.name === xCol)
   const yColInfo  = columns.find(c => c.name === yCol)
@@ -989,10 +1026,8 @@ function AreaCard({ item, columns, rows, isPreview }: {
   return (
     <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
       <CardHeader className="shrink-0">
-        <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>
-        <CardDescription>
-          {filterLabel ?? `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}
-        </CardDescription>
+        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
@@ -1035,8 +1070,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
               stroke="var(--color-y)"
               strokeWidth={2}
               fillOpacity={1}
-              animationBegin={0}
-              {...(yCol2Info && stacked ? { stackId: "a" } : {})}
+                           {...(yCol2Info && stacked ? { stackId: "a" } : {})}
             />
             {yCol2Info && (
               <Area
@@ -1046,8 +1080,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
                 stroke="var(--color-y2)"
                 strokeWidth={2}
                 fillOpacity={1}
-                animationBegin={0}
-                {...(stacked ? { stackId: "a" } : {})}
+                               {...(stacked ? { stackId: "a" } : {})}
               />
             )}
             {showLegend && yCol2Info && <ChartLegend content={<ChartLegendContent />} />}
@@ -1068,7 +1101,7 @@ function PieCard({ item, columns, rows, isPreview }: {
 }) {
   if (!item.chart) return null
   const palette = useContext(PaletteContext)
-  const { title, xCol, yCol, agg, showCenter = true, showLegend = true } = item.chart
+  const { title, xCol, yCol, agg, showCenter = true, showLegend = true, showTitle = true, showDescription = true, description } = item.chart
 
   const xColInfo = columns.find(c => c.name === xCol)
   const yColInfo = columns.find(c => c.name === yCol)
@@ -1086,8 +1119,8 @@ function PieCard({ item, columns, rows, isPreview }: {
   return (
     <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
       <CardHeader className="shrink-0">
-        <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>
-        <CardDescription>{`${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>
+        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && <CardDescription>{description || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-2">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto">
@@ -1296,6 +1329,7 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
           transition: (isDragging || isResizing) ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
         }}
         onMouseDown={onMouseDown}
+        onDoubleClick={e => { e.stopPropagation(); onEdit() }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }}
       >
         <div
@@ -1686,6 +1720,10 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   const [datePickerPos,    setDatePickerPos]    = useState<{ top: number; left: number } | null>(null)
   const dateAnchorRef = useRef<HTMLButtonElement>(null)
   const [configShowTrend,  setConfigShowTrend]  = useState(false)
+  const [configShowLabel,       setConfigShowLabel]       = useState(true)
+  const [configShowBadge,       setConfigShowBadge]       = useState(true)
+  const [configShowDescription, setConfigShowDescription] = useState(true)
+  const [configDescription,     setConfigDescription]     = useState("")
 
   // ── chart card dialog state ──
   const [pendingChartPos,  setPendingChartPos]  = useState<{ x: number; y: number } | null>(null)
@@ -1703,6 +1741,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
   const [chartConfigShowLegend, setChartConfigShowLegend] = useState(false)
   const [chartConfigShowCenter, setChartConfigShowCenter] = useState(true)
   const [chartConfigOrientation, setChartConfigOrientation] = useState<"horizontal" | "vertical">("vertical")
+  const [chartConfigShowTitle, setChartConfigShowTitle] = useState(true)
+  const [chartConfigShowDescription, setChartConfigShowDescription] = useState(true)
+  const [chartConfigDescription, setChartConfigDescription] = useState("")
   // Delayed flag so the preview chart only mounts after the dialog CSS animation finishes
   const [chartPreviewReady, setChartPreviewReady] = useState(false)
   useEffect(() => {
@@ -1988,16 +2029,20 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     const item = layoutRef.current.find(it => it.id === id)
     if (!item) return
     if (item.stat) {
-      const { column, agg, label, filter, filterFrom, filterTo, trend } = item.stat
+      const { column, agg, label, filter, filterFrom, filterTo, trend, showLabel, showBadge, showDescription, description } = item.stat
       setConfigCol(column)
       setConfigAgg(agg)
       setConfigTitle(label)
       setConfigFilter(filter ?? "all")
       setConfigDateRange(filterFrom && filterTo ? { from: new Date(filterFrom), to: new Date(filterTo) } : undefined)
       setConfigShowTrend(!!trend)
+      setConfigShowLabel(showLabel !== false)
+      setConfigShowBadge(showBadge !== false)
+      setConfigShowDescription(showDescription !== false)
+      setConfigDescription(description ?? "")
       setEditingId(id)
     } else if (item.chart) {
-      const { xCol, yCol, yCol2, agg, title, filter, type, smooth, showLabels, stacked, showLegend, showCenter, orientation } = item.chart
+      const { xCol, yCol, yCol2, agg, title, filter, type, smooth, showLabels, stacked, showLegend, showCenter, orientation, showTitle, showDescription, description } = item.chart
       setChartDialogType(type)
       setChartConfigXCol(xCol)
       setChartConfigYCol(yCol)
@@ -2011,6 +2056,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setChartConfigShowLegend(showLegend ?? (type === "pie"))
       setChartConfigShowCenter(showCenter !== false)
       setChartConfigOrientation(orientation ?? "vertical")
+      setChartConfigShowTitle(showTitle !== false)
+      setChartConfigShowDescription(showDescription !== false)
+      setChartConfigDescription(description ?? "")
       setEditingChartId(id)
     } else if (item.table) {
       const { cols, title, filter } = item.table
@@ -2049,6 +2097,10 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       column: configCol, agg: configAgg, label, value,
       filter: configFilter, filterFrom: cfFrom, filterTo: cfTo, filterLabel: filterLabel ?? undefined,
       trend, trendUp, trendLabel,
+      showLabel: configShowLabel,
+      showBadge: configShowBadge,
+      showDescription: configShowDescription,
+      ...(configShowDescription && configDescription.trim() ? { description: configDescription.trim() } : {}),
     }
     if (editingId) {
       setLayout(prev => prev.map(it => it.id === editingId ? { ...it, stat } : it))
@@ -2064,7 +2116,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingPos(null)
     }
-  }, [pendingPos, editingId, configCol, configAgg, configTitle, configFilter, configDateRange, configShowTrend, pushHistory])
+  }, [pendingPos, editingId, configCol, configAgg, configTitle, configFilter, configDateRange, configShowTrend, configShowLabel, configShowBadge, configShowDescription, configDescription, pushHistory])
 
   const handleChartConfirm = useCallback(() => {
     if (!pendingChartPos && !editingChartId) return
@@ -2099,6 +2151,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       ...(chartDialogType === "bar" && {
         orientation: chartConfigOrientation,
       }),
+      showTitle: chartConfigShowTitle,
+      showDescription: chartConfigShowDescription,
+      ...(chartConfigShowDescription && chartConfigDescription.trim() ? { description: chartConfigDescription.trim() } : {}),
     }
     if (editingChartId) {
       setLayout(prev => prev.map(it => it.id === editingChartId ? { ...it, chart } : it))
@@ -2114,7 +2169,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })
       setPendingChartPos(null)
     }
-  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter, chartConfigOrientation, pushHistory])
+  }, [pendingChartPos, editingChartId, chartDialogType, chartConfigXCol, chartConfigYCol, chartConfigYCol2, chartConfigAgg, chartConfigTitle, chartConfigFilter, chartConfigSmooth, chartConfigShowLabels, chartConfigStacked, chartConfigShowLegend, chartConfigShowCenter, chartConfigOrientation, chartConfigShowTitle, chartConfigShowDescription, chartConfigDescription, pushHistory])
 
   const handleTableConfirm = useCallback(() => {
     if (!pendingTablePos && !editingTableId) return
@@ -2143,6 +2198,18 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       setPendingTablePos(null)
     }
   }, [pendingTablePos, editingTableId, tableConfigTitle, tableConfigCols, tableConfigFilter, pushHistory])
+
+  // ── dark-mode flag (watches html.classList for next-themes toggle) ──
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+  )
+  useEffect(() => {
+    const obs = new MutationObserver(() =>
+      setIsDark(document.documentElement.classList.contains("dark"))
+    )
+    obs.observe(document.documentElement, { attributeFilter: ["class"] })
+    return () => obs.disconnect()
+  }, [])
 
   // ── derived ──
   const numCols    = columns.filter(c => c.type === "number")
@@ -2186,6 +2253,33 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                   onChange={e => setConfigTitle(e.target.value)}
                   placeholder={`${AGG_LABELS[configAgg]} ${configCol}`}
                 />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input id="stat-show-label" type="checkbox" checked={configShowLabel} onChange={e => setConfigShowLabel(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                  <Label htmlFor="stat-show-label" className="font-normal text-muted-foreground cursor-pointer">Show label</Label>
+                </label>
+                {configShowTrend && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input id="stat-show-badge" type="checkbox" checked={configShowBadge} onChange={e => setConfigShowBadge(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                    <Label htmlFor="stat-show-badge" className="font-normal text-muted-foreground cursor-pointer">Show trend badge</Label>
+                  </label>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input id="stat-show-desc" type="checkbox" checked={configShowDescription} onChange={e => setConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                  <Label htmlFor="stat-show-desc" className="cursor-pointer">Description</Label>
+                </label>
+                {configShowDescription && (
+                  <Input
+                    value={configDescription}
+                    onChange={e => setConfigDescription(e.target.value)}
+                    placeholder="Leave blank for auto-generated"
+                  />
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -2293,27 +2387,36 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Preview</p>
                     <Card className="bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card pointer-events-none select-none">
                       <CardHeader>
-                        <CardDescription>{previewLabel}</CardDescription>
+                        {configShowLabel && <CardDescription>{previewLabel}</CardDescription>}
                         <CardTitle className="text-2xl font-semibold tabular-nums">{previewVal}</CardTitle>
-                        {previewTrend && (
+                        {previewTrend && configShowBadge && (
                           <CardAction>
-                            <Badge variant="outline">
+                            <Badge variant="outline" style={(() => {
+                              const pc = isDark ? palette.primary.dark : palette.primary.light
+                              const dc = isDark ? "oklch(0.72 0.14 5)" : "oklch(0.52 0.18 5)"
+                              const c = previewTrend.up ? pc : dc
+                              return { color: c, borderColor: colorAlpha(c, 0.3) }
+                            })()}>
                               <PreviewTrendIcon />
                               {previewTrend.pct}
                             </Badge>
                           </CardAction>
                         )}
                       </CardHeader>
-                      <CardFooter className="flex-col items-start gap-1.5 text-sm">
-                        <div className="line-clamp-1 flex items-center gap-2 font-medium">
-                          {previewTrend
-                            ? <>{previewTrend.up ? "Trending up" : "Trending down"} <PreviewTrendIcon className="size-4" /> {previewTrend.label}</>
-                            : previewFilterLabel ?? `${AGG_LABELS[configAgg]} of ${configCol}`}
-                        </div>
-                        {previewTrend
-                          ? previewFilterLabel && <div className="text-muted-foreground">{previewFilterLabel}</div>
-                          : <div className="text-muted-foreground">{AGG_LABELS[configAgg]} of {configCol}</div>}
-                      </CardFooter>
+                      {configShowDescription && (
+                        <CardFooter className="flex-col items-start gap-1.5 text-sm">
+                          <div className="line-clamp-1 flex items-center gap-2 font-medium">
+                            {configDescription.trim()
+                              ? configDescription.trim()
+                              : previewTrend
+                              ? <>{previewTrend.up ? "Trending up" : "Trending down"} <PreviewTrendIcon className="size-4" /> {previewTrend.label}</>
+                              : previewFilterLabel ?? `${AGG_LABELS[configAgg]} of ${configCol}`}
+                          </div>
+                          {!configDescription.trim() && (previewTrend
+                            ? previewFilterLabel && <div className="text-muted-foreground">{previewFilterLabel}</div>
+                            : <div className="text-muted-foreground">{AGG_LABELS[configAgg]} of {configCol}</div>)}
+                        </CardFooter>
+                      )}
                     </Card>
                   </div>
                 )
@@ -2346,6 +2449,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
             showLegend: chartConfigShowLegend,
             showCenter: chartConfigShowCenter,
             orientation: chartConfigOrientation,
+            showTitle: chartConfigShowTitle,
+            showDescription: chartConfigShowDescription,
+            description: chartConfigDescription || undefined,
           },
         }
         const hasPreviewData = !!(chartConfigXCol && chartConfigYCol)
@@ -2365,13 +2471,31 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                   ) : (
                     <>
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="chart-title">Title <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                        <Input
-                          id="chart-title"
-                          value={chartConfigTitle}
-                          onChange={e => setChartConfigTitle(e.target.value)}
-                          placeholder={chartConfigXCol && chartConfigYCol ? `${AGG_LABELS[chartConfigAgg]} ${chartConfigYCol} by ${chartConfigXCol}` : "Chart title"}
-                        />
+                        <div className="flex items-center gap-2">
+                          <input type="checkbox" id="chart-show-title" checked={chartConfigShowTitle} onChange={e => setChartConfigShowTitle(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                          <Label htmlFor="chart-show-title">Title</Label>
+                        </div>
+                        {chartConfigShowTitle && (
+                          <Input
+                            id="chart-title"
+                            value={chartConfigTitle}
+                            onChange={e => setChartConfigTitle(e.target.value)}
+                            placeholder={chartConfigXCol && chartConfigYCol ? `${AGG_LABELS[chartConfigAgg]} ${chartConfigYCol} by ${chartConfigXCol}` : "Chart title"}
+                          />
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <input type="checkbox" id="chart-show-desc" checked={chartConfigShowDescription} onChange={e => setChartConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                          <Label htmlFor="chart-show-desc">Description</Label>
+                        </div>
+                        {chartConfigShowDescription && (
+                          <Input
+                            value={chartConfigDescription}
+                            onChange={e => setChartConfigDescription(e.target.value)}
+                            placeholder="Leave blank for auto-generated"
+                          />
+                        )}
                       </div>
 
                       <div className="flex flex-col gap-1.5">

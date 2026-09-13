@@ -126,6 +126,17 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [x] **Tables** — config dialog with column checkboxes (select/deselect all) and period filter
   - Sticky header, scrollable body, 100-row limit with "Showing N of M rows" footer
 - [x] Sidebar hover previews for all tile types (fixed pixel dimensions, no ResponsiveContainer in portals)
+- [x] **Text box tiles** — `type: "text"` tile with Tiptap v3 rich text editor. Drag from sidebar, double-click to edit.
+  - Edit dialog: transparent `DialogContent` overlay, tile rendered at exact canvas dimensions, Tiptap toolbar above, Save/Cancel centred below
+  - Toolbar uses `bg-background` (not `bg-muted`) — muted is near-white in light mode
+  - Inactive toolbar buttons: `text-foreground/70` (not `text-muted-foreground`) for light-mode visibility
+  - `useEditorState` hook required for reactive `isActive()` in toolbar — plain `useEditor` doesn't trigger re-renders
+- [x] **Live edit previews** — all chart/table/stat edit dialogs show a two-column layout: form left, live preview right
+  - `DialogContent` max-width must be overridden with inline `style={{ maxWidth: '56rem' }}` — base class `sm:max-w-sm` beats Tailwind utilities
+  - Footer is a plain `<div>` not `<DialogFooter>` (which has `-mb-4` that clips content in `p-0` parents)
+  - Preview chart mounts via `chartPreviewReady` gate (120ms timeout after dialog opens) — prevents Recharts line animation stuttering against the dialog's CSS open transition
+  - All chart card components have `isPreview?: boolean` prop; bar chart preview wires `onToggleOrientation` to `chartConfigOrientation` state
+  - Line/Area curves use `type="monotone"` — `"natural"` cubic splines can oscillate below zero into axis text
 - [x] **Demo dashboard** — `/dashboard?demo=true` renders a fake e-commerce dataset with a pre-built layout. `buildDemoLayout(canvasW)` is called client-side after canvas width is measured so tiles fill the full width at any resolution. `ResizeObserver` re-runs it on window resize.
 - [x] **Color palettes** — 6 palettes (Violet, Sky, Indigo, Rose, Teal, Coral) with lighter, more inviting oklch values. Custom HSV color picker in the header. Default is Violet.
 - [x] **AI dashboard generation** — "Generate dashboard →" on the landing page dialog calls Claude Haiku server-side with column schema + 20 sample rows. Haiku returns a `LayoutItem[]` JSON array in SNAP units; server scales to pixels, validates bounds/column references, right-aligns rows, computes stat values and trend comparisons, then passes as `initialLayout` to the canvas. Falls back to empty canvas on failure. `ANTHROPIC_API_KEY` in `apps/web/.env.local`.
@@ -139,9 +150,7 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
    - Implementation: add `FilterContext` (similar to `PaletteContext`) holding `{ column: string; value: string } | null`. Recharts `onClick` on Bar/Pie/Line sets it. All `aggregateByX` / `filterRows` calls check it and add an extra filter pass. A dismissible chip in the header shows the active filter. Escape clears it.
    - This is the #1 feature that turns Dashly from "pretty charts" into "actual BI tool".
 
-2. **Text box tile** — new tile `type: "text"` with a `text?: { content: string; fontSize?: number }` config. Renders a Card with a contenteditable or textarea. Drag from sidebar like other tiles.
-
-3. **Filter bar / slicer panel** — persistent strip above the canvas with dropdown slicers per categorical column. Selecting a value sets the `FilterContext`.
+2. **Filter bar / slicer panel** — persistent strip above the canvas with dropdown slicers per categorical column. Selecting a value sets the `FilterContext`.
 
 ### SaaS
 
