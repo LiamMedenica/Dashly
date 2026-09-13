@@ -141,24 +141,26 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [x] **Color palettes** — 6 palettes (Violet, Sky, Indigo, Rose, Teal, Coral) with lighter, more inviting oklch values. Custom HSV color picker in the header. Default is Violet.
 - [x] **AI dashboard generation** — "Generate dashboard →" on the landing page dialog calls Claude Haiku server-side with column schema + 20 sample rows. Haiku returns a `LayoutItem[]` JSON array in SNAP units; server scales to pixels, validates bounds/column references, right-aligns rows, computes stat values and trend comparisons, then passes as `initialLayout` to the canvas. Falls back to empty canvas on failure. `ANTHROPIC_API_KEY` in `apps/web/.env.local`.
   - Granularity detection: inspects median gap between unique dates → daily/weekly/monthly/yearly → drives trend label ("vs last week" etc.) and is included in the Haiku prompt so chart titles match.
+- [x] **Cross-chart filters / slicers** — `FilterContext` holding `{ filters: SlicerFilters, dateFrom, dateTo, setFilter, setDateRange, clearAll }`. Clicking a bar or pie slice sets a categorical slicer. All card components call `applyGlobalFilter(rows, columns, filters, dateFrom, dateTo)` via context — bypasses `GridItem` React.memo.
+  - Pie chart excludes its own xCol from `applyGlobalFilter` so all slices stay visible; selection shown via `fillOpacity` (0.35 for unselected)
+  - Bar chart onClick uses `d.payload.x` (not `d.x` which is pixel position); date-type x columns skip click-to-filter
+  - All charts remount on filter change via `key={filterKey}` → clean Recharts enter animation, no partial-draw glitch
+- [x] **Filter panel** — floating popup (`absolute top-14 right-3`, `w-72`, `rounded-xl`, scale+opacity animation). Filters button top-right, palette-accent border/text, badge shows active count.
+  - Date range: preset pills (All/7D/30D/3M/YTD/1Y) + custom dual-handle `DateRangeSlider` (document mousemove/mouseup, handles in closure)
+  - Categorical slicers: one `<select>` per category/text column with 2–100 unique values
+  - Footer: **Clear all** (disabled when no active filters) + **Done** (accent colour, closes panel)
+  - Click-outside backdrop (`z-30`) behind the popup closes it on mousedown
+- [x] **KPI count-up animation** — `useCountUp(target, duration=650)` hook. Animates from 0 on mount, between old/new values on filter change. `fromRef = null` reset in cleanup so React 18 Strict Mode double-invocation re-animates correctly. Ease-out cubic via RAF.
 
 ## What's next (priority order)
 
-### Canvas features (do these before auth/billing — makes the product worth paying for)
+### SaaS — build this to make money
 
-1. **Cross-chart filters / slicers** — click a chart element (bar, pie slice, line point) to set a global filter that all tiles respect.
-   - Implementation: add `FilterContext` (similar to `PaletteContext`) holding `{ column: string; value: string } | null`. Recharts `onClick` on Bar/Pie/Line sets it. All `aggregateByX` / `filterRows` calls check it and add an extra filter pass. A dismissible chip in the header shows the active filter. Escape clears it.
-   - This is the #1 feature that turns Dashly from "pretty charts" into "actual BI tool".
-
-2. **Filter bar / slicer panel** — persistent strip above the canvas with dropdown slicers per categorical column. Selecting a value sets the `FilterContext`.
-
-### SaaS
-
-4. Auth — Clerk (simplest Next.js integration)
-5. Share flow — generate a read-only shareable URL, gate behind signup
-6. Stripe billing — $9.99/month, usage-gated on save/share
-7. Saved dashboard hub — sidebar list of past dashboards persisted to DB (PlanetScale or Supabase)
-8. Landing page — pricing section, feature screenshots, hero GIF
+1. **Auth (Clerk)** — `npm install @clerk/nextjs`. Gate save/share behind signup. ~2hrs.
+2. **Save dashboard (Supabase)** — persist `{ sheetUrl, layout: LayoutItem[] }` to a `dashboards` table. ~4hrs.
+3. **Share link** — `/dashboard/[id]` read-only public page, no auth required to view. This is the growth mechanic.
+4. **Stripe billing** — $9.99/month. Free tier: 1 saved dashboard. Paid: unlimited. ~3hrs.
+5. **Landing page** — pricing section, hero GIF/screenshot, one-liner above the fold.
 
 ### Launch readiness
 
