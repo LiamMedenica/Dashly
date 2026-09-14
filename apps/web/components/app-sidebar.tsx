@@ -247,7 +247,7 @@ export function AppSidebar({
               render={<a href="/" />}
             >
               <CommandIcon className="size-5!" />
-              <span className="text-base font-semibold">Dashly</span>
+              <span className="text-base font-semibold">DataBubble</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

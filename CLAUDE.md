@@ -1,6 +1,8 @@
-﻿# Dashly
+﻿# DataBubble
 
 "Tableau but in 2026" — paste a Google Sheets URL → auto-generate an interactive dashboard → share with team → $9.99/month.
+
+Brand name: **DataBubble** (was Dashly). Domain: databubble.app. CSS classes use `db-` prefix.
 
 ## Monorepo structure
 
@@ -151,12 +153,13 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
   - Footer: **Clear all** (disabled when no active filters) + **Done** (accent colour, closes panel)
   - Click-outside backdrop (`z-30`) behind the popup closes it on mousedown
 - [x] **KPI count-up animation** — `useCountUp(target, duration=650)` hook. Animates from 0 on mount, between old/new values on filter change. `fromRef = null` reset in cleanup so React 18 Strict Mode double-invocation re-animates correctly. Ease-out cubic via RAF.
+- [x] **Auth modal** — Supabase Auth (`@supabase/supabase-js` + `@supabase/ssr`). Email/password sign up + sign in. Google OAuth wired (`signInWithOAuth`) — awaiting credentials. Confirmation email screen replaces form on sign up. `UserMenu` dropdown with avatar initials + sign out. Auth state via `onAuthStateChange`. Supabase session refreshed in `proxy.ts` (Next.js 16 equivalent of middleware). Client: `utils/supabase/client.ts`. Server: `utils/supabase/server.ts`.
 
 ## What's next (priority order)
 
 ### SaaS — build this to make money
 
-1. **Auth (Clerk)** — `npm install @clerk/nextjs`. Gate save/share behind signup. ~2hrs.
+1. **Google OAuth** — Supabase Auth UI is wired. Needs Google Cloud Console Client ID + Secret → paste into Supabase Auth → Providers → Google. Redirect URI: `https://dwohgqlseyvosanitywa.supabase.co/auth/v1/callback`.
 2. **Save dashboard (Supabase)** — persist `{ sheetUrl, layout: LayoutItem[] }` to a `dashboards` table. ~4hrs.
 3. **Share link** — `/dashboard/[id]` read-only public page, no auth required to view. This is the growth mechanic.
 4. **Stripe billing** — $9.99/month. Free tier: 1 saved dashboard. Paid: unlimited. ~3hrs.
