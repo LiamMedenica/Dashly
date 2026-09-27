@@ -198,7 +198,8 @@ type GenerateResult =
 
 export async function generateDashboardLayout(
   columns: ColumnInfo[],
-  rows: string[][]
+  rows: string[][],
+  userNotes?: string
 ): Promise<GenerateResult> {
   if (!process.env.ANTHROPIC_API_KEY) {
     return { tiles: null, error: "AI generation is not configured — ANTHROPIC_API_KEY is missing." }
@@ -214,6 +215,7 @@ export async function generateDashboardLayout(
   const granularity = dateCol ? detectGranularity(rows, dateCol) : null
 
   const prompt = `Here is a dataset. Study it carefully, then design a custom dashboard that best communicates what this data is about.
+${userNotes ? `\nUSER INSTRUCTIONS (follow these precisely — they take priority over everything else):\n${userNotes}\n` : ""}
 
 COLUMN STATISTICS (${rows.length} total rows):
 ${colSummary}

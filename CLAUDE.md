@@ -1,6 +1,8 @@
 ﻿# DataBubble
 
-"Tableau but in 2026" — paste a Google Sheets URL → auto-generate an interactive dashboard → share with team → $9.99/month.
+"Tableau but in 2026" — paste a Google Sheets URL → auto-generate an interactive dashboard → share with team → from $9.99/month.
+
+**Pricing:** Free ($0, 1 dashboard, no sharing) · Starter ($9.99/mo / £7.99, 10 dashboards, sharing — "Most popular") · Pro ($17.99/mo / £15.99, 20 dashboards, custom branding). Sharing is a paid feature (Starter+). Currency auto-detects via `navigator.language`.
 
 Brand name: **DataBubble** (was Dashly). Domain: databubble.app. CSS classes use `db-` prefix.
 
@@ -163,7 +165,7 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 2. **Save dashboard (Supabase)** — persist `{ sheetUrl, layout: LayoutItem[] }` to a `dashboards` table. ~4hrs.
 3. **Share link** — `/dashboard/[id]` read-only public page, no auth required to view. This is the growth mechanic.
 4. **Stripe billing** — $9.99/month. Free tier: 1 saved dashboard. Paid: unlimited. ~3hrs.
-5. **Landing page** — pricing section, hero GIF/screenshot, one-liner above the fold.
+5. **Landing page** — DONE. Hero with glow + blue headline, stats strip, dot-grid texture, interactive showcase demo, features, 3-tier pricing with Most Popular badge, FAQ, footer. Create dialog is two-panel (blue brand + white form) with "Notes for AI" field wired into AI prompt.
 
 ### Launch readiness
 

@@ -9,9 +9,9 @@ import { type LayoutItem } from "@/components/dashboard-grid"
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ url?: string; name?: string; demo?: string; generate?: string }>
+  searchParams: Promise<{ url?: string; name?: string; demo?: string; generate?: string; notes?: string }>
 }) {
-  const { url, name, demo, generate } = await searchParams
+  const { url, name, demo, generate, notes } = await searchParams
 
   const isDemo = demo === "true"
   let columns: ColumnInfo[] = []
@@ -33,7 +33,7 @@ export default async function Page({
     }
 
     if (generate === "true" && columns.length > 0) {
-      const result = await generateDashboardLayout(columns, rows)
+      const result = await generateDashboardLayout(columns, rows, notes)
       if (result.tiles) {
         initialLayout = result.tiles
       } else {
