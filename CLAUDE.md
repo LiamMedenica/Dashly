@@ -170,7 +170,7 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 2. **Save dashboard (Supabase)** — persist `{ sheetUrl, layout: LayoutItem[] }` to a `dashboards` table. ~4hrs.
 3. **Share link** — `/dashboard/[id]` read-only public page, no auth required to view. This is the growth mechanic.
 4. **Stripe billing** — $9.99/month. Free tier: 1 saved dashboard. Paid: unlimited. ~3hrs.
-5. **Landing page** — DONE. Hero with glow + blue headline, stats strip, dot-grid texture, interactive showcase demo, features, 3-tier pricing with Most Popular badge, FAQ, footer. Create dialog is two-panel (blue brand + white form) with "Notes for AI" field wired into AI prompt.
+5. **Landing page** — DONE. Hero with glow + blue headline, stats strip, dot-grid texture, interactive showcase demo, features, 3-tier pricing with Most Popular badge, FAQ, footer. Create dialog is two-panel (blue brand + white form) with "Notes for AI" field wired into AI prompt. Auth modal is two-panel (same pattern). Nav is always transparent with drop-shadows; sticky nav is a direct child of the page root (not inside any h-dvh wrapper). Hero: `-mt-[84px] h-dvh` with `pt-24` content padding. Showcase uses CSS `zoom` (0.78/0.88/1.0) for laptop scaling.
 
 ### Launch readiness
 

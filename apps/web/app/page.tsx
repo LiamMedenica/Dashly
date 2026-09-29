@@ -354,7 +354,7 @@ function DashboardShowcase() {
   }, [selCat])
 
   return (
-    <div className="pt-16 px-4">
+    <div className="pt-8 px-4">
       <div className="max-w-7xl mx-auto">
 
         {/* Header */}
@@ -384,8 +384,9 @@ function DashboardShowcase() {
           ))}
         </div>
 
-        {/* Dashboard frame */}
-        <div className="reveal-up relative">
+        {/* Dashboard frame — zoom scales layout+visual together; no squishing */}
+        <style>{`@media(max-width:1279px){.sc-frame{zoom:0.78}}@media(min-width:1280px) and (max-width:1535px){.sc-frame{zoom:0.88}}`}</style>
+        <div className="reveal-up relative sc-frame">
 
           {/* "Try me" pencil annotation */}
           <div className="absolute -top-9 right-6 flex items-center gap-1.5 pointer-events-none select-none z-10" aria-hidden>
@@ -862,17 +863,17 @@ export default function Page() {
         aria-hidden
       />
 
-      {/* ── Nav ──────────────────────────────────────────────────────────── */}
+      {/* ── Nav — standalone sticky so it persists through the whole page ── */}
       <nav className="sticky top-0 z-50 grid grid-cols-3 items-center px-10 py-6 bg-transparent pointer-events-none">
         <button
-          className="text-3xl font-bold tracking-tight text-blue-500 hover:text-blue-400 transition-colors duration-150 text-left pointer-events-auto"
+          className="text-3xl font-bold tracking-tight text-blue-500 hover:text-blue-400 transition-colors duration-150 text-left pointer-events-auto drop-shadow-md"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
         >
           DataBubble
         </button>
 
         <div className="hidden md:flex items-center justify-center pointer-events-auto">
-          <div className="flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-full px-2 py-1.5 shadow-sm">
+          <div className="flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-full px-2 py-1.5 shadow-md">
             {NAV_ITEMS.map(({ label, href }) => (
               <button key={label} onClick={() => scrollTo(href)} className="text-sm font-medium text-muted-foreground hover:text-foreground px-3.5 py-1.5 rounded-full hover:bg-white dark:hover:bg-neutral-700 transition-all duration-150 whitespace-nowrap">
                 {label}
@@ -881,7 +882,7 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pointer-events-auto">
+        <div className="flex items-center justify-end gap-2 pointer-events-auto [&>*]:drop-shadow-md">
           {user ? (
             <UserMenu user={user} onSignOut={handleSignOut} />
           ) : (
@@ -898,9 +899,8 @@ export default function Page() {
         </div>
       </nav>
 
-      {/* ── Hero + stats strip — together fill remaining viewport height ── */}
-      <div className="flex-1 flex flex-col">
-      <section className="relative flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-6">
+      {/* ── Hero — -mt pulls it up behind the nav; h-dvh = exactly one viewport tall ── */}
+      <section className="relative -mt-[84px] h-dvh flex flex-col text-center">
         {/* Central glow */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden>
           <div
@@ -908,12 +908,13 @@ export default function Page() {
             style={{ background: "radial-gradient(ellipse, rgba(96,165,250,0.35) 0%, rgba(59,130,246,0.08) 50%, transparent 70%)" }}
           />
         </div>
-        <div className="relative z-10 flex flex-col items-center gap-5">
+        {/* pt-24 clears the transparent nav; flex-1 fills remaining space above stats strip */}
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 pt-24 pb-6 gap-4">
           <div className="hero-item inline-flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-full px-4 py-1.5 bg-blue-50/80 dark:bg-blue-950/50 backdrop-blur-sm">
             <span className="size-1.5 rounded-full bg-blue-500 animate-pulse flex-shrink-0" />
             Free to try · No account needed
           </div>
-          <h1 className="hero-item text-6xl sm:text-7xl lg:text-8xl font-bold tracking-tight leading-[1.05] max-w-4xl">
+          <h1 className="hero-item text-5xl sm:text-6xl lg:text-7xl 2xl:text-8xl font-bold tracking-tight leading-[1.05] max-w-4xl">
             Turn your spreadsheet
             <br />
             <span className="text-blue-500">into a dashboard.</span>
@@ -930,17 +931,15 @@ export default function Page() {
             </Button>
           </div>
         </div>
+        {/* Stats strip — last flex child, sits at bottom of section = bottom of viewport */}
+        <StatsStrip />
       </section>
 
-      {/* ── Stats strip — pinned to bottom of first screen ───────────────── */}
-      <StatsStrip />
-      </div>{/* end flex-1 wrapper */}
-
       {/* ── How it works + live showcase ─────────────────────────────────── */}
-      <section id="how-it-works" className="py-24 px-6 bg-neutral-50 dark:bg-neutral-900/40">
+      <section id="how-it-works" className="py-16 px-6 bg-neutral-50 dark:bg-neutral-900/40">
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-16">
-            <p className="reveal-up text-xs font-semibold uppercase tracking-widest text-blue-500 mb-4">How it works</p>
+          <div className="text-center mb-10">
+            <p className="reveal-up text-xs font-semibold uppercase tracking-widest text-blue-500 mb-3">How it works</p>
             <h2 className="reveal-up text-4xl sm:text-5xl font-bold tracking-tight">Three steps to your dashboard</h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
