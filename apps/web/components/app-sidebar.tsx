@@ -35,7 +35,6 @@ import {
   BarChart3Icon,
   CalendarIcon,
   ChevronRightIcon,
-  CommandIcon,
   DatabaseIcon,
   HashIcon,
   HomeIcon,
@@ -246,8 +245,7 @@ export function AppSidebar({
               className="data-[slot=sidebar-menu-button]:p-1.5!"
               render={<a href="/" />}
             >
-              <CommandIcon className="size-5!" />
-              <span className="text-base font-semibold">DataBubble</span>
+              <span className="text-base font-bold tracking-tight" style={{ color: "#3b82f6" }}>DataBubble</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

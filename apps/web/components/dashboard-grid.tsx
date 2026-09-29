@@ -11,13 +11,12 @@ import { COLOR_PALETTES, buildCustomPalette, type ColorPalette } from "@/lib/pal
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@workspace/ui/components/table"
 import {
-  Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
+  Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@workspace/ui/components/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -26,7 +25,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Calendar } from "@workspace/ui/components/calendar"
 import { NativeSelect, NativeSelectOption } from "@workspace/ui/components/native-select"
-import { TrendingUpIcon, TrendingDownIcon, CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon, BoldIcon, ItalicIcon, UnderlineIcon as UnderlineIconLucide, ListIcon, ListOrderedIcon, Heading1Icon, Heading2Icon, TypeIcon, AlignLeftIcon, AlignCenterIcon, AlignRightIcon, XIcon, SlidersHorizontalIcon } from "lucide-react"
+import { CalendarIcon, BarChart2Icon, BarChartHorizontalIcon, PencilIcon, CopyIcon, Trash2Icon, SaveIcon, Share2Icon, ZoomInIcon, ZoomOutIcon, ScanIcon, ImageIcon, BoldIcon, ItalicIcon, UnderlineIcon as UnderlineIconLucide, ListIcon, ListOrderedIcon, Heading1Icon, Heading2Icon, TypeIcon, AlignLeftIcon, AlignCenterIcon, AlignRightIcon, XIcon, SlidersHorizontalIcon } from "lucide-react"
 import { type DateRange } from "react-day-picker"
 import { type ColumnInfo } from "@/lib/analyze"
 import { toast } from "sonner"
@@ -75,15 +74,6 @@ function rubberBand(v: number, lo: number, hi: number) {
 
 function parseNum(v: string): number {
   return parseFloat(v.replace(/[$€£¥₹,%\s]/g, "").replace(/,/g, ""))
-}
-
-// Works for both hex (#rrggbb) and oklch(L C H) strings
-function colorAlpha(color: string, alpha: number): string {
-  if (color.startsWith("#")) {
-    const a = Math.round(alpha * 255).toString(16).padStart(2, "0")
-    return color + a
-  }
-  return color.replace(")", ` / ${alpha})`)
 }
 
 function fmtValue(n: number): string {
@@ -686,7 +676,7 @@ function TextCard({ item, onEdit }: { item: LayoutItem; onEdit: () => void }) {
     <>
       <style>{TEXT_EDITOR_STYLES}</style>
       <Card
-        className="h-full bg-card overflow-hidden"
+        className="h-full bg-white dark:bg-card overflow-hidden rounded-2xl border-black/[0.06] dark:border-white/[0.06]"
         style={{ padding: 0, gap: 0 }}
         onDoubleClick={e => { e.stopPropagation(); onEdit() }}
       >
@@ -758,7 +748,7 @@ function TextEditDialog({ item, onSave, onClose }: {
           style={{ width: item.w, maxWidth: "calc(100vw - 32px)" }}
         >
           <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={() => { onSave(editor?.getHTML() ?? "<p></p>"); onClose() }}>Save</Button>
+          <Button size="sm" className="bg-blue-500 hover:bg-blue-600 text-white" onClick={() => { onSave(editor?.getHTML() ?? "<p></p>"); onClose() }}>Save</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -782,7 +772,7 @@ function StatCard({ item, columns, rows }: { item: LayoutItem, columns: ColumnIn
     return () => obs.disconnect()
   }, [])
 
-  const { label, value: cachedValue, agg, column, filter, filterFrom, filterTo, filterLabel, trend, trendUp, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
+  const { label, value: cachedValue, agg, column, filter, filterFrom, filterTo, filterLabel, trend, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
 
   // Re-compute value live so global filters are reflected without re-saving
   const col = columns.find(c => c.name === column)
@@ -795,46 +785,43 @@ function StatCard({ item, columns, rows }: { item: LayoutItem, columns: ColumnIn
     : NaN
   const animatedNum = useCountUp(isFinite(rawNum) ? rawNum : 0)
   const value = isFinite(rawNum) ? fmtValue(animatedNum) : (cachedValue ?? "—")
-  const TrendIcon = trendUp === false ? TrendingDownIcon : TrendingUpIcon
   const paletteColor = isDark ? palette.primary.dark : palette.primary.light
-  // Down uses a fixed warm-red oklch chosen to sit between the palette hues (none are at hue 350-5)
-  const downColor = isDark ? "oklch(0.72 0.14 5)" : "oklch(0.52 0.18 5)"
-  const badgeStyle = trendUp === true
-    ? { color: paletteColor, borderColor: colorAlpha(paletteColor, 0.3) }
-    : trendUp === false
-    ? { color: downColor, borderColor: colorAlpha(downColor, 0.3) }
-    : {}
+
+  const footerText = description
+    ? description
+    : trend
+    ? trendLabel ?? ""
+    : (filterLabel ?? `${AGG_LABELS[agg]} of ${column}`)
+  const footerSub = !description && !trend ? `${AGG_LABELS[agg]} of ${column}` : null
 
   return (
-    <Card className={`@container/card h-full bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card${!showDescription ? " justify-center" : ""}`}>
-      <CardHeader>
-        {showLabel && <CardDescription>{label}</CardDescription>}
-        <CardTitle className={`font-semibold tabular-nums ${showDescription ? "text-2xl @[250px]/card:text-3xl" : "text-3xl @[250px]/card:text-4xl"}`}>{value}</CardTitle>
-        {trend && showBadge && (
-          <CardAction>
-            <Badge variant="outline" style={badgeStyle}>
-              <TrendIcon />
-              {trend}
-            </Badge>
-          </CardAction>
+    <div className="h-full bg-white dark:bg-card rounded-2xl border border-black/[0.06] dark:border-white/[0.06] shadow-sm flex flex-col gap-2 p-5 overflow-hidden">
+      {/* label + trend badge row */}
+      <div className="flex items-start justify-between gap-1">
+        {showLabel && (
+          <p className="text-xs font-medium text-gray-400 dark:text-zinc-400 uppercase tracking-wide leading-none">{label}</p>
         )}
-      </CardHeader>
+        {trend && showBadge && (
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0 ${!trend.startsWith("-") ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/60 text-rose-500 dark:text-rose-400"}`}>
+            {trend}
+          </span>
+        )}
+      </div>
+
+      {/* big number */}
+      <p className="text-3xl font-bold text-gray-800 dark:text-zinc-100 tabular-nums leading-none">{value}</p>
+
+      {/* accent bar + description */}
       {showDescription && (
-        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-          <div className="line-clamp-1 flex items-center gap-2 font-medium">
-            {description
-              ? description
-              : trend
-              ? <>{trendUp ? "Trending up" : "Trending down"} <TrendIcon className="size-4" /> {trendLabel}</>
-              : (filterLabel ?? `${AGG_LABELS[agg]} of ${column}`)}
+        <div className="flex items-center gap-2 mt-auto pt-1">
+          <div className="h-1 w-8 rounded-full flex-shrink-0 transition-colors duration-300" style={{ background: paletteColor }} />
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <span className="text-[10px] text-gray-500 dark:text-zinc-400 leading-tight line-clamp-1">{footerText}</span>
+            {footerSub && <span className="text-[10px] text-gray-400 dark:text-zinc-500 leading-tight">{footerSub}</span>}
           </div>
-          {!description && (trend
-            ? filterLabel && <div className="text-muted-foreground">{filterLabel}</div>
-            : <div className="text-muted-foreground">{AGG_LABELS[agg]} of {column}</div>
-          )}
-        </CardFooter>
+        </div>
       )}
-    </Card>
+    </div>
   )
 }
 
@@ -873,7 +860,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
   const isHorizontal = orientation === "horizontal"
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
       <CardHeader className="shrink-0">
         {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
         {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
@@ -1010,7 +997,7 @@ function LineCard({ item, columns, rows, isPreview }: {
   }
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
       <CardHeader className="shrink-0">
         {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
         {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
@@ -1125,7 +1112,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
   }
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
       <CardHeader className="shrink-0">
         {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
         {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
@@ -1222,7 +1209,7 @@ function PieCard({ item, columns, rows, isPreview }: {
   const chartCfg: ShadChartConfig = { value: { label: yCol } }
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
       <CardHeader className="shrink-0">
         {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
         {showDescription && <CardDescription>{description || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
@@ -1317,7 +1304,7 @@ function TableCard({ item, columns, rows }: {
     .filter((c): c is ColumnInfo => !!c)
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden shadow-xs dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
       <CardHeader className="shrink-0">
         <CardTitle>{title || "Data Table"}</CardTitle>
         {filterLabel && <CardDescription>{filterLabel}</CardDescription>}
@@ -2632,12 +2619,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
               <div className="flex flex-col gap-2">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input id="stat-show-label" type="checkbox" checked={configShowLabel} onChange={e => setConfigShowLabel(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                  <input id="stat-show-label" type="checkbox" checked={configShowLabel} onChange={e => setConfigShowLabel(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                   <Label htmlFor="stat-show-label" className="font-normal text-muted-foreground cursor-pointer">Show label</Label>
                 </label>
                 {configShowTrend && (
                   <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input id="stat-show-badge" type="checkbox" checked={configShowBadge} onChange={e => setConfigShowBadge(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                    <input id="stat-show-badge" type="checkbox" checked={configShowBadge} onChange={e => setConfigShowBadge(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                     <Label htmlFor="stat-show-badge" className="font-normal text-muted-foreground cursor-pointer">Show trend badge</Label>
                   </label>
                 )}
@@ -2645,7 +2632,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
               <div className="flex flex-col gap-1.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input id="stat-show-desc" type="checkbox" checked={configShowDescription} onChange={e => setConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                  <input id="stat-show-desc" type="checkbox" checked={configShowDescription} onChange={e => setConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                   <Label htmlFor="stat-show-desc" className="cursor-pointer">Description</Label>
                 </label>
                 {configShowDescription && (
@@ -2739,7 +2726,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                         type="checkbox"
                         checked={configShowTrend}
                         onChange={e => setConfigShowTrend(e.target.checked)}
-                        className="size-4 rounded border-input accent-primary"
+                        className="size-4 rounded border-input accent-blue-500"
                       />
                       <span className="text-sm text-muted-foreground">
                         Compare to previous period
@@ -2756,43 +2743,35 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
               {previewVal !== null && (() => {
                 const previewLabel = configTitle.trim() || [AGG_LABELS[configAgg], configCol, previewFilterLabel].filter(Boolean).join(" · ")
-                const PreviewTrendIcon = previewTrend?.up === false ? TrendingDownIcon : TrendingUpIcon
+                const paletteColor = isDark ? palette.primary.dark : palette.primary.light
+                const trendStr = previewTrend?.pct ?? ""
+                const footerText = configDescription.trim()
+                  ? configDescription.trim()
+                  : previewTrend
+                  ? previewTrend.label
+                  : (previewFilterLabel ?? `${AGG_LABELS[configAgg]} of ${configCol}`)
                 return (
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Preview</p>
-                    <Card className="bg-linear-to-t from-primary/5 to-card shadow-xs dark:bg-card pointer-events-none select-none">
-                      <CardHeader>
-                        {configShowLabel && <CardDescription>{previewLabel}</CardDescription>}
-                        <CardTitle className="text-2xl font-semibold tabular-nums">{previewVal}</CardTitle>
-                        {previewTrend && configShowBadge && (
-                          <CardAction>
-                            <Badge variant="outline" style={(() => {
-                              const pc = isDark ? palette.primary.dark : palette.primary.light
-                              const dc = isDark ? "oklch(0.72 0.14 5)" : "oklch(0.52 0.18 5)"
-                              const c = previewTrend.up ? pc : dc
-                              return { color: c, borderColor: colorAlpha(c, 0.3) }
-                            })()}>
-                              <PreviewTrendIcon />
-                              {previewTrend.pct}
-                            </Badge>
-                          </CardAction>
+                    <div className="bg-white dark:bg-card rounded-2xl border border-black/[0.06] dark:border-white/[0.06] shadow-sm flex flex-col gap-2 p-5 pointer-events-none select-none">
+                      <div className="flex items-start justify-between gap-1">
+                        {configShowLabel && (
+                          <p className="text-xs font-medium text-gray-400 dark:text-zinc-400 uppercase tracking-wide leading-none">{previewLabel}</p>
                         )}
-                      </CardHeader>
+                        {trendStr && configShowBadge && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0 ${!trendStr.startsWith("-") ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/60 text-rose-500 dark:text-rose-400"}`}>
+                            {trendStr}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-3xl font-bold text-gray-800 dark:text-zinc-100 tabular-nums leading-none">{previewVal}</p>
                       {configShowDescription && (
-                        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-                          <div className="line-clamp-1 flex items-center gap-2 font-medium">
-                            {configDescription.trim()
-                              ? configDescription.trim()
-                              : previewTrend
-                              ? <>{previewTrend.up ? "Trending up" : "Trending down"} <PreviewTrendIcon className="size-4" /> {previewTrend.label}</>
-                              : previewFilterLabel ?? `${AGG_LABELS[configAgg]} of ${configCol}`}
-                          </div>
-                          {!configDescription.trim() && (previewTrend
-                            ? previewFilterLabel && <div className="text-muted-foreground">{previewFilterLabel}</div>
-                            : <div className="text-muted-foreground">{AGG_LABELS[configAgg]} of {configCol}</div>)}
-                        </CardFooter>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="h-1 w-8 rounded-full flex-shrink-0" style={{ background: paletteColor }} />
+                          <span className="text-[10px] text-gray-500 dark:text-zinc-400 leading-tight line-clamp-1">{footerText}</span>
+                        </div>
                       )}
-                    </Card>
+                    </div>
                   </div>
                 )
               })()}
@@ -2801,7 +2780,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
           <DialogFooter>
             <Button variant="outline" onClick={() => { setPendingPos(null); setEditingId(null) }}>Cancel</Button>
-            <Button onClick={handleConfirm} disabled={!configCol || numCols.length === 0 || (configFilter === "custom" && (!configDateRange?.from || !configDateRange?.to))}>{editingId ? "Save changes" : "Add to dashboard"}</Button>
+            <Button className="bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50" onClick={handleConfirm} disabled={!configCol || numCols.length === 0 || (configFilter === "custom" && (!configDateRange?.from || !configDateRange?.to))}>{editingId ? "Save changes" : "Add to dashboard"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2847,7 +2826,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                     <>
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-2">
-                          <input type="checkbox" id="chart-show-title" checked={chartConfigShowTitle} onChange={e => setChartConfigShowTitle(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                          <input type="checkbox" id="chart-show-title" checked={chartConfigShowTitle} onChange={e => setChartConfigShowTitle(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                           <Label htmlFor="chart-show-title">Title</Label>
                         </div>
                         {chartConfigShowTitle && (
@@ -2861,7 +2840,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                       </div>
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-2">
-                          <input type="checkbox" id="chart-show-desc" checked={chartConfigShowDescription} onChange={e => setChartConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                          <input type="checkbox" id="chart-show-desc" checked={chartConfigShowDescription} onChange={e => setChartConfigShowDescription(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                           <Label htmlFor="chart-show-desc">Description</Label>
                         </div>
                         {chartConfigShowDescription && (
@@ -2930,14 +2909,14 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                             <button
                               type="button"
                               onClick={() => setChartConfigOrientation("vertical")}
-                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation !== "horizontal" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation !== "horizontal" ? "border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-400" : "border-border text-muted-foreground hover:bg-accent"}`}
                             >
                               <BarChart2Icon className="size-3.5" /> Vertical
                             </button>
                             <button
                               type="button"
                               onClick={() => setChartConfigOrientation("horizontal")}
-                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation === "horizontal" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-sm transition-colors ${chartConfigOrientation === "horizontal" ? "border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-400" : "border-border text-muted-foreground hover:bg-accent"}`}
                             >
                               <BarChartHorizontalIcon className="size-3.5" /> Horizontal
                             </button>
@@ -2948,11 +2927,11 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                       {chartDialogType === "pie" && (
                         <div className="flex flex-col gap-2">
                           <label className="flex items-center gap-2 cursor-pointer select-none">
-                            <input type="checkbox" checked={chartConfigShowCenter} onChange={e => setChartConfigShowCenter(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                            <input type="checkbox" checked={chartConfigShowCenter} onChange={e => setChartConfigShowCenter(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                             <span className="text-sm text-muted-foreground">Show center total</span>
                           </label>
                           <label className="flex items-center gap-2 cursor-pointer select-none">
-                            <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                            <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                             <span className="text-sm text-muted-foreground">Show legend</span>
                           </label>
                         </div>
@@ -2971,23 +2950,23 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                           </div>
                           <div className="flex flex-col gap-2">
                             <label className="flex items-center gap-2 cursor-pointer select-none">
-                              <input type="checkbox" checked={chartConfigSmooth} onChange={e => setChartConfigSmooth(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                              <input type="checkbox" checked={chartConfigSmooth} onChange={e => setChartConfigSmooth(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                               <span className="text-sm text-muted-foreground">Smooth curve</span>
                             </label>
                             {chartDialogType === "line" && (
                               <label className="flex items-center gap-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={chartConfigShowLabels} onChange={e => setChartConfigShowLabels(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                <input type="checkbox" checked={chartConfigShowLabels} onChange={e => setChartConfigShowLabels(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                                 <span className="text-sm text-muted-foreground">Show data labels</span>
                               </label>
                             )}
                             {chartDialogType === "area" && chartConfigYCol2 && (
                               <>
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                                  <input type="checkbox" checked={chartConfigStacked} onChange={e => setChartConfigStacked(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                  <input type="checkbox" checked={chartConfigStacked} onChange={e => setChartConfigStacked(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                                   <span className="text-sm text-muted-foreground">Stack series</span>
                                 </label>
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                                  <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-primary" />
+                                  <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
                                   <span className="text-sm text-muted-foreground">Show legend</span>
                                 </label>
                               </>
@@ -3023,7 +3002,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
               <div className="flex flex-none justify-end gap-2 px-6 py-4 border-t border-border bg-muted/50">
                 <Button variant="outline" onClick={() => { setPendingChartPos(null); setEditingChartId(null) }}>Cancel</Button>
-                <Button onClick={handleChartConfirm} disabled={!chartConfigXCol || !chartConfigYCol}>
+                <Button className="bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50" onClick={handleChartConfirm} disabled={!chartConfigXCol || !chartConfigYCol}>
                   {editingChartId ? "Save changes" : "Add to dashboard"}
                 </Button>
               </div>
@@ -3091,7 +3070,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                       onChange={e => setTableConfigCols(prev =>
                         e.target.checked ? [...prev, col.name] : prev.filter(n => n !== col.name)
                       )}
-                      className="size-4 rounded border-input accent-primary"
+                      className="size-4 rounded border-input accent-blue-500"
                     />
                     <span className="text-sm text-muted-foreground truncate">{col.name}</span>
                   </label>
@@ -3102,7 +3081,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
           <DialogFooter>
             <Button variant="outline" onClick={() => { setPendingTablePos(null); setEditingTableId(null) }}>Cancel</Button>
-            <Button onClick={handleTableConfirm} disabled={tableConfigCols.length === 0}>
+            <Button className="bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50" onClick={handleTableConfirm} disabled={tableConfigCols.length === 0}>
               {editingTableId ? "Save changes" : "Add to dashboard"}
             </Button>
           </DialogFooter>
@@ -3127,11 +3106,15 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })()}
 
       {/* ── canvas viewport ── */}
-      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-muted/60" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
+      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-[#f0f6ff] dark:bg-muted/60" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
+        {/* Dot grid — matches landing page texture */}
+        <div className="absolute inset-0 pointer-events-none" aria-hidden
+          style={{ backgroundImage: "radial-gradient(circle, #93c5fd 1px, transparent 1px)", backgroundSize: "28px 28px", opacity: 0.45 }}
+        />
         <div
           ref={canvasRef}
           data-dashboard-canvas
-          className="absolute top-0 left-0 bg-background shadow-md rounded-xl overflow-hidden"
+          className="absolute top-0 left-0 bg-white dark:bg-background shadow-2xl rounded-3xl overflow-hidden"
           style={{ width: LOGICAL_W, height: canvasMinH, transformOrigin: '0 0', willChange: 'transform' }}
           onMouseDown={onPanStart}
           onContextMenu={onViewportContextMenu}
@@ -3191,7 +3174,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
               type="button"
               onMouseDown={e => e.stopPropagation()}
               onClick={() => setFilterPanelOpen(v => !v)}
-              className="absolute top-3 right-3 z-50 flex items-center gap-1.5 h-8 px-3 rounded-lg bg-background/95 shadow-md text-xs transition-colors select-none"
+              className="absolute top-3 right-3 z-50 flex items-center gap-1.5 h-8 px-3 rounded-full bg-white dark:bg-background/95 shadow-md text-xs transition-colors select-none font-medium"
               style={{ border: `1.5px solid ${accentColor}`, color: accentColor }}
             >
               <SlidersHorizontalIcon className="size-3.5" />
@@ -3214,16 +3197,17 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         <FilterPanel columns={columns} rows={rows} open={filterPanelOpen} onClose={() => setFilterPanelOpen(false)} />
 
         {/* zoom controls */}
-        <div className="absolute bottom-4 right-4 z-50 flex items-center gap-1.5 bg-background/90 backdrop-blur-sm border border-border rounded-lg shadow-md px-2 py-1">
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => doZoom(0.8)}>
-            <span className="text-sm leading-none">−</span>
+        <div className="absolute bottom-4 right-4 z-50 flex items-center gap-0.5 bg-white dark:bg-background/90 border border-black/[0.06] dark:border-white/[0.08] rounded-full shadow-md px-1.5 py-1">
+          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={() => doZoom(0.8)}>
+            <span className="text-sm leading-none select-none">−</span>
           </Button>
           <span ref={zoomLabelRef} className="text-xs tabular-nums w-10 text-center text-muted-foreground select-none">100%</span>
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => doZoom(1.25)}>
-            <span className="text-sm leading-none">+</span>
+          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={() => doZoom(1.25)}>
+            <span className="text-sm leading-none select-none">+</span>
           </Button>
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={fitToWindow} title="Fit to window">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-muted-foreground"><rect x="1" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/></svg>
+          <div className="w-px h-3.5 bg-black/[0.08] dark:bg-white/[0.12] mx-0.5" />
+          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={fitToWindow} title="Fit to window">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/></svg>
           </Button>
         </div>
       </div>{/* outer viewport */}

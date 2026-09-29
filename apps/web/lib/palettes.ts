@@ -16,10 +16,10 @@ export const COLOR_PALETTES: ColorPalette[] = [
   },
   {
     id: "sky",
-    label: "Sky",
-    primary:   { light: "oklch(0.64 0.19 222)",  dark: "oklch(0.80 0.13 222)" },
-    secondary: { light: "oklch(0.70 0.14 200)",  dark: "oklch(0.64 0.10 200)" },
-    slices: ["oklch(0.64 0.19 222)", "oklch(0.68 0.16 245)", "oklch(0.70 0.14 200)", "oklch(0.66 0.17 260)", "oklch(0.73 0.11 185)"],
+    label: "Blue",
+    primary:   { light: "oklch(0.58 0.22 257)",  dark: "oklch(0.76 0.15 240)" },
+    secondary: { light: "oklch(0.66 0.17 245)",  dark: "oklch(0.68 0.11 235)" },
+    slices: ["oklch(0.58 0.22 257)", "oklch(0.50 0.26 265)", "oklch(0.70 0.16 242)", "oklch(0.64 0.19 250)", "oklch(0.76 0.12 233)"],
   },
   {
     id: "indigo",
@@ -51,7 +51,7 @@ export const COLOR_PALETTES: ColorPalette[] = [
   },
 ]
 
-export const DEFAULT_PALETTE_ID = "violet"
+export const DEFAULT_PALETTE_ID = "sky"
 
 // Builds a palette from an arbitrary hex color (#rrggbb).
 // Uses alpha-suffixed hex variants for slices so the hue stays consistent.

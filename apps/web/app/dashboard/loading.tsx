@@ -8,7 +8,7 @@ export default function Loading() {
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="block rounded-full bg-primary"
+            className="block rounded-full bg-blue-500"
             style={{
               width: 10,
               height: 10,

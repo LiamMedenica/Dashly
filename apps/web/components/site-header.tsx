@@ -178,11 +178,21 @@ export function SiteHeader({
   }
 
   return (
-    <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
+    <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b bg-white/90 dark:bg-background/90 backdrop-blur-sm transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
       <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
         <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mx-2 h-4 data-vertical:self-auto" />
 
+        {/* Brand */}
+        <a
+          href="/"
+          className="text-blue-500 font-bold text-lg tracking-tight hover:text-blue-400 transition-colors shrink-0 ml-1 hidden sm:block"
+        >
+          DataBubble
+        </a>
+
+        <Separator orientation="vertical" className="mx-2 h-4 data-vertical:self-auto hidden sm:block" />
+
+        {/* Dashboard name */}
         <div className="flex items-center gap-1.5 flex-1 min-w-0 group/title">
           <input
             ref={inputRef}
@@ -194,7 +204,7 @@ export function SiteHeader({
             onMouseDown={!editing ? e => { e.preventDefault(); setEditing(true) } : undefined}
             className={`bg-transparent outline-none field-sizing-content px-1.5 py-0.5 rounded-md transition-[box-shadow] min-w-0 ${
               editing
-                ? "text-[17px] font-medium ring-1 ring-muted-foreground/25 cursor-text"
+                ? "text-[17px] font-medium ring-1 ring-blue-300 cursor-text"
                 : "text-base font-medium ring-0 cursor-pointer hover:opacity-70"
             }`}
           />
@@ -208,31 +218,38 @@ export function SiteHeader({
           )}
         </div>
 
+        {/* Palette + actions */}
         {onPaletteChange && (
-          <div className="flex items-center gap-1.5 ml-auto">
-            {COLOR_PALETTES.map(p => {
-              const isSelected = paletteId === p.id
-              return (
-                <button
-                  key={p.id}
-                  title={p.label}
-                  onClick={() => onPaletteChange(p.id)}
-                  className="size-4 rounded-full transition-all shrink-0"
-                  style={{
-                    background: p.primary.light,
-                    outline: isSelected ? `2px solid ${p.primary.light}` : "none",
-                    outlineOffset: "2px",
-                  }}
-                />
-              )
-            })}
+          <div className="flex items-center gap-2 ml-auto">
+            {/* Palette dots */}
+            <div className="flex items-center gap-1.5">
+              {COLOR_PALETTES.map(p => {
+                const isSelected = paletteId === p.id
+                return (
+                  <button
+                    key={p.id}
+                    title={p.label}
+                    onClick={() => onPaletteChange(p.id)}
+                    className="rounded-full transition-all shrink-0"
+                    style={{
+                      width:       isSelected ? 20 : 16,
+                      height:      isSelected ? 20 : 16,
+                      background:  p.primary.light,
+                      boxShadow:   isSelected ? `0 0 0 2px white, 0 0 0 3.5px ${p.primary.light}` : "none",
+                    }}
+                  />
+                )
+              })}
+            </div>
 
+            {/* Custom color picker */}
             {onCustomColorChange && (
               <div className="relative shrink-0" ref={pickerRef}>
                 <Button
                   variant="ghost"
                   size="icon"
                   title="Custom color"
+                  className="size-8 rounded-full"
                   onClick={() => setPickerOpen(o => !o)}
                   style={paletteId === "custom" ? { color: liveColor } : undefined}
                 >
@@ -240,8 +257,7 @@ export function SiteHeader({
                 </Button>
 
                 {pickerOpen && (
-                  <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-xl border border-border bg-background shadow-lg p-3 flex flex-col gap-2.5">
-
+                  <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-xl border border-border bg-white dark:bg-background shadow-lg p-3 flex flex-col gap-2.5">
                     {/* Saturation / brightness square */}
                     <div className="relative w-full select-none" style={{ height: 128 }}>
                       <div
@@ -253,7 +269,6 @@ export function SiteHeader({
                         <div className="absolute inset-0" style={{ background: "linear-gradient(to right, white, transparent)" }} />
                         <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom, transparent, black)" }} />
                       </div>
-                      {/* cursor sits outside overflow-hidden so it's never clipped */}
                       <div
                         className="pointer-events-none absolute size-3.5 rounded-full border-2 border-white shadow"
                         style={{
@@ -318,7 +333,7 @@ export function SiteHeader({
                           const n = hexInput.startsWith("#") ? hexInput : `#${hexInput}`
                           if (!/^#[0-9a-f]{6}$/i.test(n)) setHexInput(liveColor)
                         }}
-                        className="flex-1 min-w-0 bg-muted rounded-md px-2 py-1 text-xs font-mono outline-none focus:ring-1 focus:ring-ring"
+                        className="flex-1 min-w-0 bg-muted rounded-md px-2 py-1 text-xs font-mono outline-none focus:ring-1 focus:ring-blue-400"
                         placeholder="#6366f1"
                         maxLength={7}
                         spellCheck={false}
@@ -333,10 +348,11 @@ export function SiteHeader({
           </div>
         )}
 
+        {/* Dark mode toggle */}
         <Button
           variant="ghost"
           size="icon"
-          className={onPaletteChange ? "" : "ml-auto shrink-0"}
+          className={`rounded-full size-8 ${onPaletteChange ? "" : "ml-auto shrink-0"}`}
           onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
         >
           <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />

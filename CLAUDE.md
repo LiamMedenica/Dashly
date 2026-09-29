@@ -111,6 +111,8 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [x] **Ctrl+Z** undo (history stack, up to 50 states), **Ctrl+C / Ctrl+V** copy-paste tiles
 - [x] Right-click context menu on all tile types: Duplicate / Edit / Delete
 - [x] **Stat cards** — drag from sidebar → config dialog (metric, aggregation, period, trend comparison)
+  - Plain-div layout (not Card/CardHeader) — matches landing page KpiCard style exactly
+  - Uppercase label, bold 3xl number, sign-based badge (emerald for `+`, rose for `-`), accent bar in palette primary color
   - Period filter system: `FilterPeriod` presets + custom date range (calendar portal)
   - Data-relative dates: "current month" = month of latest data point, not today
   - Trend comparison: computes current vs previous equivalent calendar period
@@ -141,8 +143,11 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
   - Preview chart mounts via `chartPreviewReady` gate (120ms timeout after dialog opens) — prevents Recharts line animation stuttering against the dialog's CSS open transition
   - All chart card components have `isPreview?: boolean` prop; bar chart preview wires `onToggleOrientation` to `chartConfigOrientation` state
   - Line/Area curves use `type="monotone"` — `"natural"` cubic splines can oscillate below zero into axis text
-- [x] **Demo dashboard** — `/dashboard?demo=true` renders a fake e-commerce dataset with a pre-built layout. `buildDemoLayout(canvasW)` is called client-side after canvas width is measured so tiles fill the full width at any resolution. `ResizeObserver` re-runs it on window resize.
-- [x] **Color palettes** — 6 palettes (Violet, Sky, Indigo, Rose, Teal, Coral) with lighter, more inviting oklch values. Custom HSV color picker in the header. Default is Violet.
+- [x] **Demo dashboard** — `/dashboard?demo=true` renders a fake bakery dataset ("The Crumb") with a pre-built layout. `buildDemoLayout(canvasW)` is called client-side after canvas width is measured so tiles fill the full width at any resolution. `ResizeObserver` re-runs it on window resize. Stat cards show August 2024 values with MoM trend vs July 2024, computed by `monthStats(prefix)` helper in `demo-data.ts`.
+- [x] **Color palettes** — 6 palettes (Violet, Blue, Indigo, Rose, Teal, Coral). "Blue" (`id: "sky"`) is the default (`DEFAULT_PALETTE_ID = "sky"`) — rich brand blue matching `#3b82f6` (`oklch(0.58 0.22 257)`). Custom HSV color picker in the header.
+  - `--ring` CSS variable is blue (`oklch(0.60 0.22 255)`) — all Input and NativeSelect focus rings are blue.
+  - Checkboxes use `accent-blue-500`. Save/primary buttons use `bg-blue-500 hover:bg-blue-600 text-white`.
+  - Badge color in StatCard is **sign-based**: `!trend.startsWith("-")` → emerald, else rose. This matches the landing page KpiCard convention and avoids confusion with semantically-inverted metrics (e.g. waste reduction is rose even though lower is better).
 - [x] **AI dashboard generation** — "Generate dashboard →" on the landing page dialog calls Claude Haiku server-side with column schema + 20 sample rows. Haiku returns a `LayoutItem[]` JSON array in SNAP units; server scales to pixels, validates bounds/column references, right-aligns rows, computes stat values and trend comparisons, then passes as `initialLayout` to the canvas. Falls back to empty canvas on failure. `ANTHROPIC_API_KEY` in `apps/web/.env.local`.
   - Granularity detection: inspects median gap between unique dates → daily/weekly/monthly/yearly → drives trend label ("vs last week" etc.) and is included in the Haiku prompt so chart titles match.
 - [x] **Cross-chart filters / slicers** — `FilterContext` holding `{ filters: SlicerFilters, dateFrom, dateTo, setFilter, setDateRange, clearAll }`. Clicking a bar or pie slice sets a categorical slicer. All card components call `applyGlobalFilter(rows, columns, filters, dateFrom, dateTo)` via context — bypasses `GridItem` React.memo.

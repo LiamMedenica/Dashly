@@ -18,7 +18,7 @@ export default async function Page({
   let rows: string[][] = []
   let initialLayout: LayoutItem[] | undefined
   let generationError: string | undefined
-  const dashboardName = name || (isDemo ? "Sample E-Commerce Dashboard" : "My Dashboard")
+  const dashboardName = name || (isDemo ? "The Crumb · Micro-Bakery" : "My Dashboard")
 
   if (!isDemo && url) {
     try {
