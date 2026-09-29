@@ -898,7 +898,8 @@ export default function Page() {
         </div>
       </nav>
 
-      {/* ── Hero — flex-1 fills exact remaining height after sticky nav ── */}
+      {/* ── Hero + stats strip — together fill remaining viewport height ── */}
+      <div className="flex-1 flex flex-col">
       <section className="relative flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-6">
         {/* Central glow */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden>
@@ -912,12 +913,12 @@ export default function Page() {
             <span className="size-1.5 rounded-full bg-blue-500 animate-pulse flex-shrink-0" />
             Free to try · No account needed
           </div>
-          <h1 className="hero-item text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.05] max-w-4xl">
+          <h1 className="hero-item text-6xl sm:text-7xl lg:text-8xl font-bold tracking-tight leading-[1.05] max-w-4xl">
             Turn your spreadsheet
             <br />
             <span className="text-blue-500">into a dashboard.</span>
           </h1>
-          <p className="hero-item text-muted-foreground text-lg max-w-sm leading-relaxed">
+          <p className="hero-item text-muted-foreground text-xl max-w-sm leading-relaxed">
             Paste a Google Sheets link. Get a beautiful, shareable dashboard in seconds.
           </p>
           <div className="hero-item flex flex-wrap items-center justify-center gap-3">
@@ -931,8 +932,9 @@ export default function Page() {
         </div>
       </section>
 
-      {/* ── Stats strip ───────────────────────────────────────────────────── */}
+      {/* ── Stats strip — pinned to bottom of first screen ───────────────── */}
       <StatsStrip />
+      </div>{/* end flex-1 wrapper */}
 
       {/* ── How it works + live showcase ─────────────────────────────────── */}
       <section id="how-it-works" className="py-24 px-6 bg-neutral-50 dark:bg-neutral-900/40">
