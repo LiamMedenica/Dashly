@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import {
-  Sun, Moon, LogOut, Zap, LayoutGrid, Palette, Sparkles,
-  Share2, SlidersHorizontal, BarChart2, Check, ChevronDown, X,
+  Zap, LayoutGrid, Palette, Sparkles,
+  Share2, SlidersHorizontal, BarChart2, Check, ChevronDown, X, Settings,
 } from "lucide-react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
@@ -19,12 +19,10 @@ import { Button } from "@workspace/ui/components/button"
 import {
   Dialog, DialogContent, DialogTitle,
 } from "@workspace/ui/components/dialog"
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
+import { CreateDashboardDialog } from "@/components/create-dashboard-dialog"
+import { UserMenu } from "@/components/user-menu"
 
 gsap.registerPlugin(ScrollTrigger)
 
@@ -771,51 +769,22 @@ function AuthModal({ open, onClose, initialMode }: { open: boolean; onClose: () 
   )
 }
 
-// ─── UserMenu ─────────────────────────────────────────────────────────────────
-
-function UserMenu({ user, onSignOut }: { user: SupabaseUser; onSignOut: () => void }) {
-  const name     = user.user_metadata?.full_name ?? user.email ?? "Account"
-  const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="flex items-center gap-2">
-          <span className="size-6 rounded-full bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center">{initials}</span>
-          <span className="hidden sm:block text-sm">{name.split(" ")[0]}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <div className="px-2 py-1.5">
-          <p className="text-xs font-medium">{name}</p>
-          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-        </div>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onSignOut} className="text-destructive focus:text-destructive cursor-pointer">
-          <LogOut className="size-3.5 mr-2" />Sign out
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Page() {
   const router  = useRouter()
   const isGBP   = useCurrency()
-  const { resolvedTheme, setTheme } = useTheme()
-  const [user, setUser]         = useState<SupabaseUser | null>(null)
-  const [authOpen, setAuthOpen] = useState(false)
-  const [authMode, setAuthMode] = useState<AuthMode>("signin")
+  const { resolvedTheme } = useTheme()
+  const [user, setUser]             = useState<SupabaseUser | null>(null)
+  const [authOpen, setAuthOpen]     = useState(false)
+  const [authMode, setAuthMode]     = useState<AuthMode>("signin")
   const [dashOpen, setDashOpen] = useState(false)
-  const [dashName, setDashName] = useState("")
-  const [url, setUrl]           = useState("")
-  const [notes, setNotes]       = useState("")
   const pageRef                 = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const supabase = createClient()
-    supabase.auth.getUser().then(({ data: { user } }) => setUser(user))
+    // getSession reads from cookie instantly — eliminates the null→user flash
+    supabase.auth.getSession().then(({ data: { session } }) => setUser(session?.user ?? null))
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
       setUser(session?.user ?? null)
     })
@@ -823,6 +792,12 @@ export default function Page() {
   }, [])
 
   useEffect(() => {
+    const scrollTarget = sessionStorage.getItem("scrollTarget")
+    if (scrollTarget) {
+      sessionStorage.removeItem("scrollTarget")
+      setTimeout(() => document.getElementById(scrollTarget)?.scrollIntoView({ behavior: "smooth" }), 80)
+      return
+    }
     const ctx = gsap.context(() => {
       gsap.from(".hero-item", { y: 30, opacity: 0, duration: 0.7, stagger: 0.12, ease: "power3.out", delay: 0.1 })
       gsap.set(".reveal-up", { opacity: 0, y: 50 })
@@ -834,24 +809,16 @@ export default function Page() {
     return () => ctx.revert()
   }, [])
 
-  const handleSignOut = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    setUser(null)
-  }
 
-  const openAuth   = (mode: AuthMode) => { setAuthMode(mode); setAuthOpen(true) }
-  const isValidUrl = url.trim() !== "" && url.includes("docs.google.com/spreadsheets")
+  const openAuth = (mode: AuthMode) => { setAuthMode(mode); setAuthOpen(true) }
 
-  const handleNavigate = (generate: boolean) => {
-    if (!isValidUrl) return
+  const handleNavigate = (generate: boolean, name: string, url: string, notes: string) => {
     const params = new URLSearchParams()
     params.set("url", url.trim())
-    if (dashName.trim()) params.set("name", dashName.trim())
+    if (name.trim()) params.set("name", name.trim())
     if (generate) params.set("generate", "true")
     if (notes.trim()) params.set("notes", notes.trim())
     router.push(`/dashboard?${params.toString()}`)
-    setDashOpen(false)
   }
 
   return (
@@ -884,23 +851,18 @@ export default function Page() {
 
         <div className="flex items-center justify-end gap-2 pointer-events-auto [&>*]:drop-shadow-md">
           {user ? (
-            <UserMenu user={user} onSignOut={handleSignOut} />
+            <UserMenu user={user} />
           ) : (
             <>
               <Button variant="ghost" className="text-sm" onClick={() => openAuth("signin")}>Sign in</Button>
               <Button className="rounded-full bg-blue-500 hover:bg-blue-600 text-white border-0 shadow-none text-sm px-5" onClick={() => openAuth("signup")}>Get started</Button>
             </>
           )}
-          <Button variant="ghost" size="icon" className="text-muted-foreground" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}>
-            <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-            <Moon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            <span className="sr-only">Toggle theme</span>
-          </Button>
         </div>
       </nav>
 
       {/* ── Hero — -mt pulls it up behind the nav; h-dvh = exactly one viewport tall ── */}
-      <section className="relative -mt-[84px] h-dvh flex flex-col text-center">
+      <section className="relative -mt-[84px] h-dvh flex flex-col text-center animate-in fade-in-0 duration-500">
         {/* Central glow */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden>
           <div
@@ -1058,8 +1020,8 @@ export default function Page() {
             <div className="flex flex-wrap gap-12">
               <div className="flex flex-col gap-3">
                 <p className="text-xs font-semibold uppercase tracking-widest text-blue-500">Product</p>
-                {["Features", "How it works", "Pricing", "Demo"].map((item) => (
-                  <button key={item} onClick={() => item === "Demo" ? router.push("/dashboard?demo=true") : scrollTo(`#${item.toLowerCase().replace(/ /g, "-")}`)} className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left">{item}</button>
+                {["Features", "How it works", "Pricing"].map((item) => (
+                  <button key={item} onClick={() => scrollTo(`#${item.toLowerCase().replace(/ /g, "-")}`)} className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left">{item}</button>
                 ))}
               </div>
               <div className="flex flex-col gap-3">
@@ -1070,9 +1032,8 @@ export default function Page() {
               </div>
               <div className="flex flex-col gap-3">
                 <p className="text-xs font-semibold uppercase tracking-widest text-blue-500">Legal</p>
-                {["Privacy policy", "Terms of service"].map((item) => (
-                  <span key={item} className="text-sm text-muted-foreground">{item}</span>
-                ))}
+                <button onClick={() => router.push("/privacy")} className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left">Privacy policy</button>
+                <button onClick={() => router.push("/terms")} className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left">Terms of service</button>
               </div>
             </div>
           </div>
@@ -1084,124 +1045,15 @@ export default function Page() {
       </footer>
 
       {/* ── Dashboard creation dialog ──────────────────────────────────── */}
-      <Dialog open={dashOpen} onOpenChange={setDashOpen}>
-        <DialogContent className="p-0 overflow-hidden gap-0 border-0 shadow-2xl" style={{ maxWidth: "62rem" }}>
-          <DialogTitle className="sr-only">Create a dashboard</DialogTitle>
-          <div className="grid md:grid-cols-[2fr_3fr]">
-
-            {/* Left: blue brand panel */}
-            <div
-              className="relative hidden md:flex flex-col justify-between p-10 overflow-hidden"
-              style={{ background: "linear-gradient(145deg, #1d4ed8 0%, #3b82f6 55%, #60a5fa 100%)" }}
-            >
-              <div className="absolute -top-20 -right-20 w-72 h-72 rounded-full bg-white/10" />
-              <div className="absolute -bottom-16 -left-16 w-56 h-56 rounded-full bg-white/[0.06]" />
-
-              <div className="relative">
-                <span className="text-xl font-bold text-white tracking-tight">DataBubble</span>
-              </div>
-
-              <div className="relative flex flex-col gap-6">
-                <h2 className="text-3xl font-bold text-white leading-tight">
-                  Your dashboard<br />is 30 seconds<br />away.
-                </h2>
-                <ul className="flex flex-col gap-3">
-                  {[
-                    "AI picks the right charts automatically",
-                    "Drag, resize and customise freely",
-                    "Share with one link — no login needed to view",
-                  ].map((item) => (
-                    <li key={item} className="flex items-start gap-2.5 text-sm text-blue-100">
-                      <Check className="size-4 text-white mt-0.5 flex-shrink-0" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <p className="relative text-xs text-blue-200">No credit card required</p>
-            </div>
-
-            {/* Right: form panel */}
-            <div className="flex flex-col gap-6 p-8 bg-white dark:bg-background">
-              <div>
-                <h3 className="text-xl font-bold">Create a dashboard</h3>
-                <p className="text-sm text-muted-foreground mt-1">Paste your Google Sheets link to get started.</p>
-              </div>
-
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="dash-name">
-                    Dashboard name{" "}
-                    <span className="text-muted-foreground font-normal">(optional)</span>
-                  </Label>
-                  <Input
-                    id="dash-name"
-                    placeholder="e.g. Q3 Sales Report"
-                    value={dashName}
-                    onChange={(e) => setDashName(e.target.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="dash-url">Google Sheets URL</Label>
-                  <Input
-                    id="dash-url"
-                    type="url"
-                    placeholder="https://docs.google.com/spreadsheets/..."
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    className="font-mono text-xs"
-                  />
-                  {url && !isValidUrl
-                    ? <p className="text-xs text-destructive">That doesn&apos;t look like a Google Sheets URL.</p>
-                    : <p className="text-xs text-muted-foreground">Make sure sharing is set to &quot;Anyone with the link can view&quot;</p>
-                  }
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="dash-notes">
-                    Notes for AI{" "}
-                    <span className="text-muted-foreground font-normal">(optional)</span>
-                  </Label>
-                  <textarea
-                    id="dash-notes"
-                    rows={3}
-                    placeholder="e.g. Only use data from July. Ignore the 'Returns' column. Focus on Online sales."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-colors"
-                  />
-                  <p className="text-xs text-muted-foreground">Tell the AI what to focus on or leave out — it reads this before building your dashboard.</p>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2 pt-2">
-                <Button
-                  onClick={() => handleNavigate(true)}
-                  disabled={!isValidUrl}
-                  className="w-full h-11 rounded-full bg-blue-500 hover:bg-blue-600 text-white border-0 shadow-none font-semibold"
-                >
-                  Generate with AI →
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => handleNavigate(false)}
-                  disabled={!isValidUrl}
-                >
-                  Start with a blank canvas
-                </Button>
-                <Button variant="ghost" className="w-full text-muted-foreground" onClick={() => setDashOpen(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-
-          </div>
-        </DialogContent>
-      </Dialog>
+      <CreateDashboardDialog
+        open={dashOpen}
+        onClose={() => setDashOpen(false)}
+        onNavigate={handleNavigate}
+      />
 
       {/* ── Auth modal ───────────────────────────────────────────────────── */}
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} initialMode={authMode} />
+
     </div>
   )
 }

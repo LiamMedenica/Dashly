@@ -19,10 +19,14 @@ packages/ui/       Shared components (@workspace/ui/*)
 
 | File | Purpose |
 |------|---------|
-| `apps/web/app/page.tsx` | Landing page — "Create a dashboard" button + URL input modal |
+| `apps/web/app/page.tsx` | Landing page — hero, pricing, features, auth modal, create dialog |
 | `apps/web/app/dashboard/page.tsx` | Server component — fetches CSV, analyzes columns, renders canvas |
+| `apps/web/app/dashboards/page.tsx` | My Dashboards — card grid with mini SVG chart previews, share settings |
+| `apps/web/app/account/page.tsx` | Account — avatar color picker, name edit, AI usage bar, delete account |
 | `apps/web/components/dashboard-grid.tsx` | Main client component — all tile types, dialogs, drag-drop canvas |
 | `apps/web/components/app-sidebar.tsx` | Sidebar — chart type picker (draggable items), data columns list |
+| `apps/web/components/user-menu.tsx` | Shared UserMenu — hover dropdown, avatar, theme toggle, nav links, sign out |
+| `apps/web/components/create-dashboard-dialog.tsx` | Shared create dialog — used on landing + dashboards pages |
 | `apps/web/lib/sheets.ts` | `extractSheetId` + `fetchSheetData` (Google Sheets CSV, no API key) |
 | `apps/web/lib/analyze.ts` | Column type detection (`date / number / category / text / id`) |
 | `apps/web/lib/demo-data.ts` | Deterministic fake e-commerce dataset + `buildDemoLayout(canvasW)` |
@@ -160,17 +164,23 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
   - Footer: **Clear all** (disabled when no active filters) + **Done** (accent colour, closes panel)
   - Click-outside backdrop (`z-30`) behind the popup closes it on mousedown
 - [x] **KPI count-up animation** — `useCountUp(target, duration=650)` hook. Animates from 0 on mount, between old/new values on filter change. `fromRef = null` reset in cleanup so React 18 Strict Mode double-invocation re-animates correctly. Ease-out cubic via RAF.
-- [x] **Auth modal** — Supabase Auth (`@supabase/supabase-js` + `@supabase/ssr`). Email/password sign up + sign in. Google OAuth wired (`signInWithOAuth`) — awaiting credentials. Confirmation email screen replaces form on sign up. `UserMenu` dropdown with avatar initials + sign out. Auth state via `onAuthStateChange`. Supabase session refreshed in `proxy.ts` (Next.js 16 equivalent of middleware). Client: `utils/supabase/client.ts`. Server: `utils/supabase/server.ts`.
+- [x] **Auth modal** — Supabase Auth (`@supabase/supabase-js` + `@supabase/ssr`). Email/password + Google OAuth (fully configured). Confirmation email screen on sign up. `UserMenu` hover dropdown — avatar color reads from `user_metadata.avatar_color` via `AVATAR_COLOR_HEX` map (inline styles, not dynamic Tailwind). Auth state via `getSession()` (fast, reads cookie) then `onAuthStateChange`. Session refreshed in `proxy.ts` (Next.js 16 name — NOT `middleware.ts`). Client: `utils/supabase/client.ts`. Server: `utils/supabase/server.ts`. Admin: `utils/supabase/admin.ts` (uses `SUPABASE_SECRET_KEY`).
+- [x] **Supabase DB schema** — `profiles` (id, full_name, avatar_url, plan default 'free', stripe_customer_id, plan_expires_at, ai_generations_used) + `dashboards` (id, user_id, name, sheet_url, layout jsonb, share_slug, share_password_hash). RLS enabled. Auto-create profile trigger on `auth.users` insert.
+- [x] **`/account` page** — Avatar color picker (6 colors, stored in `user_metadata.avatar_color`), name edit (`supabase.auth.updateUser`), AI usage progress bar, security section (email verified, 2FA coming soon), delete account (server action in `app/account/actions.ts` using admin client).
+- [x] **`/dashboards` page** — Card grid (3 cols desktop). Each card has an SVG mini chart preview (bar/line/area with axis grid lines + tick labels), tile count, last viewed, visibility badge. "New dashboard" dashed card at grid end. Share settings dialog: public toggle, copy link, password protect checkbox. Blue border tint + lift on hover.
+- [x] **`/terms` and `/privacy`** — Placeholder legal pages. Linked from footer Legal section.
+- [x] **Shared `UserMenu`** (`components/user-menu.tsx`) — hover-to-open dropdown. Centered avatar/name/email header. Nav links (My Dashboards, Account, Billing). **Appearance toggle** (dark/light) with pill switch — theme toggle lives here, NOT in the nav. Sign out. Used on landing page and all inner pages.
+- [x] **Shared `CreateDashboardDialog`** (`components/create-dashboard-dialog.tsx`) — no labels, tall inputs (h-12), URL field with Link icon prefix, "Add notes for AI" collapsible with CSS grid-row animation (0fr→1fr), "Start blank · Cancel" on one line. Used on landing page + dashboards page.
+- [x] **Page transitions** — `animate-in fade-in-0 slide-in-from-bottom-3 duration-300` on content wrappers. Landing page hero fades in. Dashboards + account pages slide up on navigation.
 
 ## What's next (priority order)
 
 ### SaaS — build this to make money
 
-1. **Google OAuth** — Supabase Auth UI is wired. Needs Google Cloud Console Client ID + Secret → paste into Supabase Auth → Providers → Google. Redirect URI: `https://dwohgqlseyvosanitywa.supabase.co/auth/v1/callback`.
-2. **Save dashboard (Supabase)** — persist `{ sheetUrl, layout: LayoutItem[] }` to a `dashboards` table. ~4hrs.
-3. **Share link** — `/dashboard/[id]` read-only public page, no auth required to view. This is the growth mechanic.
-4. **Stripe billing** — $9.99/month. Free tier: 1 saved dashboard. Paid: unlimited. ~3hrs.
-5. **Landing page** — DONE. Hero with glow + blue headline, stats strip, dot-grid texture, interactive showcase demo, features, 3-tier pricing with Most Popular badge, FAQ, footer. Create dialog is two-panel (blue brand + white form) with "Notes for AI" field wired into AI prompt. Auth modal is two-panel (same pattern). Nav is always transparent with drop-shadows; sticky nav is a direct child of the page root (not inside any h-dvh wrapper). Hero: `-mt-[84px] h-dvh` with `pt-24` content padding. Showcase uses CSS `zoom` (0.78/0.88/1.0) for laptop scaling.
+1. **Save dashboard** ← START HERE. Schema is live. Wire canvas "Save" button → insert into `dashboards` table → enforce plan limits → replace fake rows in `/dashboards` with real data.
+2. **Wire AI generation usage** — increment `profiles.ai_generations_used` in `generate-layout.ts` after each Haiku call. Gate on plan limits (Free: 5, Starter: 50, Pro: 200).
+3. **Share link** — `share_slug` + `share_password_hash` columns exist. UI to generate slug, copy link. Route: `/dashboard/[id]` read-only public page. Starter+ only.
+4. **Stripe billing** — `stripe_customer_id` + `plan_expires_at` on profiles. Wire Stripe Checkout + webhook to update `profiles.plan`.
 
 ### Launch readiness
 
@@ -181,21 +191,16 @@ Value-first: users create a dashboard without an account. Auth (Clerk/NextAuth) 
 - [ ] Favicon set
 - [ ] robots.txt
 - [ ] sitemap.xml
-- [ ] Alt text on every image
 
 **UX / UI**
 - [ ] Custom 404 page
-- [ ] CTA above the fold on landing page
 - [ ] Mobile breakpoints
-- [ ] Sticky mobile CTA
 - [ ] Loading states
-- [ ] Form error states
-- [ ] Thank you page
-- [ ] Compressed images
+- [ ] Cookie banner
 
 **Legal / compliance**
-- [ ] Privacy policy page
-- [ ] Terms and conditions page
+- [x] Privacy policy page (`/privacy`)
+- [x] Terms and conditions page (`/terms`)
 - [ ] Cookie banner
 - [ ] Real contact address
 
