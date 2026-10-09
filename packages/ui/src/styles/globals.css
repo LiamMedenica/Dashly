@@ -132,9 +132,59 @@
   overflow: visible !important;
 }
 
+.recharts-wrapper,
+.recharts-surface {
+  outline: none !important;
+}
+
 .dot-grid {
   background-image: radial-gradient(circle, rgba(0,0,0,0.08) 1.5px, transparent 1.5px);
   background-size: 24px 24px;
+}
+
+/* ── Collapsible slide animation (Base UI --collapsible-panel-height) ──────── */
+[data-slot="collapsible-content"] {
+  overflow: hidden;
+  height: var(--collapsible-panel-height);
+  transition: height 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Sidebar chart preview animations ──────────────────────────────────────── */
+.sidebar-bar {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: sidebarBarGrow 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes sidebarBarGrow {
+  from { transform: scaleY(0); opacity: 0; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+
+.sidebar-line-path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: sidebarLineDraw 0.65s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes sidebarLineDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+.sidebar-area-fill {
+  animation: sidebarAreaFade 0.55s ease-out 0.1s both;
+}
+@keyframes sidebarAreaFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.sidebar-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sidebarDotPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes sidebarDotPop {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }
 
 .dark .dot-grid {

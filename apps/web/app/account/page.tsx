@@ -96,7 +96,7 @@ export default function AccountPage() {
   if (!user) return null
 
   const initial     = (user.user_metadata?.full_name ?? user.email ?? "?")[0].toUpperCase()
-  const colorEntry  = AVATAR_COLORS.find(c => c.key === avatarColor) ?? AVATAR_COLORS[0]
+  const colorEntry  = AVATAR_COLORS.find(c => c.key === avatarColor) ?? AVATAR_COLORS[0]!
   const plan        = ((profile?.plan ?? "free") as keyof typeof PLAN_LIMITS)
   const used        = profile?.ai_generations_used ?? 0
   const limit       = PLAN_LIMITS[plan]

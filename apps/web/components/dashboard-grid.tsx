@@ -1,8 +1,8 @@
 "use client"
 
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react"
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react"
 import { createPortal } from "react-dom"
-import { BarChart, Bar, Cell, LineChart, Line, AreaChart, Area, PieChart, Pie, Label as PieLabel, LabelList, XAxis, YAxis, CartesianGrid } from "recharts"
+import { BarChart, Bar, Cell, LineChart, Line, AreaChart, Area, PieChart, Pie, Label as PieLabel, LabelList, XAxis, YAxis, ZAxis, CartesianGrid, ScatterChart, Scatter, ComposedChart, Tooltip } from "recharts"
 import {
   ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent,
   type ChartConfig as ShadChartConfig,
@@ -309,9 +309,43 @@ function aggregateByXMulti(
   return s1.map(p => ({ x: p.x, y: p.y, y2: map2.get(p.x) ?? 0 }))
 }
 
+function computeSparkline(rows: string[][], columns: ColumnInfo[], column: string, agg: Agg): { i: number; v: number }[] {
+  const dateCol = columns.find(c => c.type === "date")
+  const valCol  = columns.find(c => c.name === column)
+  if (!dateCol || !valCol) return []
+  const buckets = new Map<string, number[]>()
+  for (const row of rows) {
+    const d = row[dateCol.index] ?? ""
+    if (!d) continue
+    const key = d.slice(0, 7)
+    const v = parseNum(row[valCol.index] ?? "")
+    if (!isFinite(v)) continue
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key)!.push(v)
+  }
+  const sorted = [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b))
+  return sorted.map(([, vals], i) => ({
+    i,
+    v: agg === "sum"   ? vals.reduce((a, b) => a + b, 0)
+     : agg === "avg"   ? vals.reduce((a, b) => a + b, 0) / vals.length
+     : agg === "count" ? vals.length
+     : agg === "max"   ? Math.max(...vals)
+     : Math.min(...vals),
+  })).slice(-12)
+}
+
+function computeScatterData(rows: string[][], xCol: ColumnInfo, yCol: ColumnInfo): { x: number; y: number }[] {
+  return rows
+    .map(row => ({
+      x: parseNum(row[xCol.index] ?? ""),
+      y: parseNum(row[yCol.index] ?? ""),
+    }))
+    .filter(p => isFinite(p.x) && isFinite(p.y))
+}
+
 // ─── types ───────────────────────────────────────────────────────────────────
 
-export type ChartType = "bar" | "line" | "area" | "pie"
+export type ChartType = "bar" | "line" | "area" | "pie" | "scatter" | "combo"
 type ChartConfig = {
   type: ChartType
   xCol: string
@@ -676,7 +710,7 @@ function TextCard({ item, onEdit }: { item: LayoutItem; onEdit: () => void }) {
     <>
       <style>{TEXT_EDITOR_STYLES}</style>
       <Card
-        className="h-full bg-white dark:bg-card overflow-hidden rounded-2xl border-black/[0.06] dark:border-white/[0.06]"
+        className="h-full bg-white dark:bg-card overflow-hidden rounded-xl ring-1 ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:shadow-none"
         style={{ padding: 0, gap: 0 }}
         onDoubleClick={e => { e.stopPropagation(); onEdit() }}
       >
@@ -774,8 +808,7 @@ function StatCard({ item, columns, rows }: { item: LayoutItem, columns: ColumnIn
 
   const { label, value: cachedValue, agg, column, filter, filterFrom, filterTo, filterLabel, trend, trendLabel, showLabel = true, showBadge = true, showDescription = true, description } = item.stat
 
-  // Re-compute value live so global filters are reflected without re-saving
-  const col = columns.find(c => c.name === column)
+  const col  = columns.find(c => c.name === column)
   const dCol = columns.find(c => c.type === "date")
   const periodRows = dCol && filter && filter !== "all"
     ? filterRows(rows, dCol, filter, filterFrom, filterTo)
@@ -792,35 +825,89 @@ function StatCard({ item, columns, rows }: { item: LayoutItem, columns: ColumnIn
     : trend
     ? trendLabel ?? ""
     : (filterLabel ?? `${AGG_LABELS[agg]} of ${column}`)
-  const footerSub = !description && !trend ? `${AGG_LABELS[agg]} of ${column}` : null
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sparklineData = useMemo(
+    () => computeSparkline(applyGlobalFilter(rows, columns, filters, dateFrom, dateTo), columns, column, agg),
+    [rows, columns, column, agg, JSON.stringify(filters), dateFrom, dateTo] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  const showSparkline = item.h >= 5 * 24 && item.w >= 7 * 24 && sparklineData.length >= 3
+  const sparklineH    = Math.min(Math.floor(item.h * 0.38), 72)
+  const isTall        = item.h >= 8 * 24
+  const isPositive    = trend ? !trend.startsWith("-") : null
 
   return (
-    <div className="h-full bg-white dark:bg-card rounded-2xl border border-black/[0.06] dark:border-white/[0.06] shadow-sm flex flex-col gap-2 p-5 overflow-hidden">
-      {/* label + trend badge row */}
-      <div className="flex items-start justify-between gap-1">
-        {showLabel && (
-          <p className="text-xs font-medium text-gray-400 dark:text-zinc-400 uppercase tracking-wide leading-none">{label}</p>
-        )}
-        {trend && showBadge && (
-          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0 ${!trend.startsWith("-") ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/60 text-rose-500 dark:text-rose-400"}`}>
-            {trend}
-          </span>
-        )}
-      </div>
+    <div className="relative h-full bg-white dark:bg-card rounded-xl border border-black/[0.06] dark:border-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:shadow-none flex flex-col overflow-hidden">
+      {/* top accent line */}
+      <div className="absolute inset-x-0 top-0 h-[3px] rounded-t-xl z-10" style={{ background: paletteColor, opacity: 0.75 }} />
 
-      {/* big number */}
-      <p className="text-3xl font-bold text-gray-800 dark:text-zinc-100 tabular-nums leading-none">{value}</p>
-
-      {/* accent bar + description */}
-      {showDescription && (
-        <div className="flex items-center gap-2 mt-auto pt-1">
-          <div className="h-1 w-8 rounded-full flex-shrink-0 transition-colors duration-300" style={{ background: paletteColor }} />
-          <div className="flex flex-col gap-0.5 min-w-0">
-            <span className="text-[10px] text-gray-500 dark:text-zinc-400 leading-tight line-clamp-1">{footerText}</span>
-            {footerSub && <span className="text-[10px] text-gray-400 dark:text-zinc-500 leading-tight">{footerSub}</span>}
-          </div>
+      {/* sparkline — ghost area shape at the bottom */}
+      {showSparkline && (
+        <div
+          className="absolute inset-x-0 bottom-0 pointer-events-none"
+          style={{ height: sparklineH, opacity: isDark ? 0.22 : 0.30 }}
+        >
+          <AreaChart
+            width={item.w}
+            height={sparklineH}
+            data={sparklineData}
+            margin={{ top: 4, right: 0, bottom: 0, left: 0 }}
+          >
+            <defs>
+              <linearGradient id={`sg-${item.id}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor={paletteColor} stopOpacity={0.55} />
+                <stop offset="100%" stopColor={paletteColor} stopOpacity={0.0}  />
+              </linearGradient>
+            </defs>
+            <Area
+              dataKey="v"
+              type="monotone"
+              stroke={paletteColor}
+              strokeWidth={1.5}
+              fill={`url(#sg-${item.id})`}
+              fillOpacity={1}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </AreaChart>
         </div>
       )}
+
+      {/* content layer */}
+      <div
+        className="relative z-10 flex flex-col h-full px-4 pt-5"
+        style={{ paddingBottom: showSparkline ? Math.max(14, sparklineH - 6) : 16 }}
+      >
+        {/* label */}
+        {showLabel && (
+          <p className="text-[10px] font-semibold uppercase tracking-[0.09em] leading-none mb-2.5 truncate text-gray-400 dark:text-zinc-500">
+            {label}
+          </p>
+        )}
+
+        {/* big value */}
+        <p className={`font-semibold tabular-nums leading-none text-gray-900 dark:text-zinc-50 ${isTall ? "text-[2.6rem]" : "text-[1.75rem]"}`}>
+          {value}
+        </p>
+
+        {/* trend badge */}
+        {trend && showBadge && (
+          <div className="mt-2.5">
+            <span className={`inline-flex items-center gap-0.5 text-[10.5px] font-semibold px-2 py-0.5 rounded-full leading-tight ${isPositive ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/60 text-rose-500 dark:text-rose-400"}`}>
+              {isPositive ? "↑" : "↓"} {trend}
+            </span>
+          </div>
+        )}
+
+        {/* footer pip + description */}
+        {showDescription && (
+          <div className="flex items-center gap-1.5 mt-auto">
+            <div className="h-[2.5px] w-4 rounded-full flex-shrink-0" style={{ background: paletteColor, opacity: 0.65 }} />
+            <span className="text-[10px] text-gray-400 dark:text-zinc-500 leading-tight line-clamp-1">{footerText}</span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -858,12 +945,19 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
   }
 
   const isHorizontal = orientation === "horizontal"
+  const totalVal = data.reduce((s, d) => s + d.y, 0)
+  const summaryLabel = data.length > 0 ? fmtValue(totalVal) : null
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
       <CardHeader className="shrink-0">
-        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
-        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && (
+          <div className="flex items-center justify-between gap-2">
+            <CardDescription className="truncate">{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>
+            {summaryLabel && <span className="text-xs font-semibold text-foreground/70 tabular-nums shrink-0">{summaryLabel}</span>}
+          </div>
+        )}
         <CardAction>
           <button
             onClick={e => { e.stopPropagation(); onToggleOrientation?.() }}
@@ -880,7 +974,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto">
           {isHorizontal ? (
-            <BarChart key={filterKey} data={data} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
+            <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
               <XAxis
                 type="number"
                 dataKey="y"
@@ -907,7 +1001,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
                 fill="var(--color-y)"
                 radius={[0, 4, 4, 0]}
                 maxBarSize={32}
-                animationBegin={0}
+                animationBegin={0} animationDuration={250}
                 cursor={!isPreview && xColInfo && xColInfo.type !== "date" ? "pointer" : undefined}
                 onClick={!isPreview && xColInfo && xColInfo.type !== "date" ? (d: unknown) => { const v = (d as { payload?: { x?: string } })?.payload?.x; if (v) setFilter(xColInfo.name, v) } : undefined}
               >
@@ -917,7 +1011,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
               </Bar>
             </BarChart>
           ) : (
-            <BarChart key={filterKey} data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+            <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="x"
@@ -941,7 +1035,7 @@ function ChartCard({ item, columns, rows, onToggleOrientation, isPreview }: {
                 fill="var(--color-y)"
                 radius={[4, 4, 0, 0]}
                 maxBarSize={48}
-                animationBegin={0}
+                animationBegin={0} animationDuration={250}
                 cursor={!isPreview && xColInfo && xColInfo.type !== "date" ? "pointer" : undefined}
                 onClick={!isPreview && xColInfo && xColInfo.type !== "date" ? (d: unknown) => { const v = (d as { payload?: { x?: string } })?.payload?.x; if (v) setFilter(xColInfo.name, v) } : undefined}
               >
@@ -996,15 +1090,23 @@ function LineCard({ item, columns, rows, isPreview }: {
     ...(yCol2Info ? { y2: { label: yCol2, theme: palette.secondary } } : {}),
   }
 
+  const latestVal = data.length > 0 ? (data[data.length - 1] as { y: number }).y : null
+  const summaryLabel = latestVal !== null ? fmtValue(latestVal) : null
+
   return (
-    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
       <CardHeader className="shrink-0">
-        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
-        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && (
+          <div className="flex items-center justify-between gap-2">
+            <CardDescription className="truncate">{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>
+            {summaryLabel && <span className="text-xs font-semibold text-foreground/70 tabular-nums shrink-0">{summaryLabel}</span>}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
-          <LineChart key={filterKey} data={data} margin={{ top: showLabels ? 20 : 4, right: 8, bottom: 0, left: 0 }}>
+          <LineChart data={data} margin={{ top: showLabels ? 20 : 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} />
             <XAxis
               dataKey="x"
@@ -1031,6 +1133,7 @@ function LineCard({ item, columns, rows, isPreview }: {
               strokeWidth={2}
               dot={showLabels ? { fill: "var(--color-y)" } : false}
               activeDot={{ r: 4 }}
+              animationBegin={0} animationDuration={250}
             >
               {showLabels && (
                 <LabelList
@@ -1051,6 +1154,7 @@ function LineCard({ item, columns, rows, isPreview }: {
                 strokeWidth={2}
                 dot={showLabels ? { fill: "var(--color-y2)" } : false}
                 activeDot={{ r: 4 }}
+                animationBegin={0} animationDuration={250}
               >
                 {showLabels && (
                   <LabelList
@@ -1111,15 +1215,23 @@ function AreaCard({ item, columns, rows, isPreview }: {
     ...(yCol2Info ? { y2: { label: yCol2, theme: palette.secondary } } : {}),
   }
 
+  const areaTotal = data.reduce((s, d) => s + d.y, 0)
+  const areaSummary = data.length > 0 ? fmtValue(areaTotal) : null
+
   return (
-    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
       <CardHeader className="shrink-0">
-        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
-        {showDescription && <CardDescription>{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>}
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && (
+          <div className="flex items-center justify-between gap-2">
+            <CardDescription className="truncate">{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` & ${yCol2}` : ""}`}</CardDescription>
+            {areaSummary && <span className="text-xs font-semibold text-foreground/70 tabular-nums shrink-0">{areaSummary}</span>}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-4">
         <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
-          <AreaChart key={filterKey} data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id={`gy-${uid}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%"  stopColor="var(--color-y)" stopOpacity={0.25} />
@@ -1158,6 +1270,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
               stroke="var(--color-y)"
               strokeWidth={2}
               fillOpacity={1}
+              animationBegin={0} animationDuration={250}
                            {...(yCol2Info && stacked ? { stackId: "a" } : {})}
             />
             {yCol2Info && (
@@ -1168,6 +1281,7 @@ function AreaCard({ item, columns, rows, isPreview }: {
                 stroke="var(--color-y2)"
                 strokeWidth={2}
                 fillOpacity={1}
+                animationBegin={0} animationDuration={250}
                                {...(stacked ? { stackId: "a" } : {})}
               />
             )}
@@ -1209,9 +1323,9 @@ function PieCard({ item, columns, rows, isPreview }: {
   const chartCfg: ShadChartConfig = { value: { label: yCol } }
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
       <CardHeader className="shrink-0">
-        {showTitle && <CardTitle>{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
         {showDescription && <CardDescription>{description || `${AGG_LABELS[agg]} of ${yCol}`}</CardDescription>}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 pb-2">
@@ -1230,7 +1344,7 @@ function PieCard({ item, columns, rows, isPreview }: {
               nameKey="name"
               innerRadius="35%"
               strokeWidth={2}
-              animationBegin={0}
+              animationBegin={0} animationDuration={250}
               cursor={!isPreview && xColInfo ? "pointer" : undefined}
               onClick={!isPreview && xColInfo ? (d: unknown) => setFilter(xColInfo.name, (d as { name?: string })?.name ?? null) : undefined}
             >
@@ -1281,6 +1395,184 @@ function PieCard({ item, columns, rows, isPreview }: {
   )
 }
 
+// ─── ScatterCard ──────────────────────────────────────────────────────────────
+
+function ScatterCard({ item, columns, rows }: {
+  item: LayoutItem
+  columns: ColumnInfo[]
+  rows: string[][]
+}) {
+  if (!item.chart) return null
+  const palette = useContext(PaletteContext)
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
+  const { title, xCol, yCol, showTitle = true, showDescription = true, description } = item.chart
+
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+  )
+  useEffect(() => {
+    const obs = new MutationObserver(() => setIsDark(document.documentElement.classList.contains("dark")))
+    obs.observe(document.documentElement, { attributeFilter: ["class"] })
+    return () => obs.disconnect()
+  }, [])
+
+  const xColInfo = columns.find(c => c.name === xCol)
+  const yColInfo = columns.find(c => c.name === yCol)
+
+  const filteredRows = applyGlobalFilter(rows, columns, filters, dateFrom, dateTo)
+  const data = xColInfo && yColInfo ? computeScatterData(filteredRows, xColInfo, yColInfo) : []
+  const filterKey = JSON.stringify(filters) + "|" + (dateFrom ?? "") + "|" + (dateTo ?? "")
+  const paletteColor = isDark ? palette.primary.dark : palette.primary.light
+
+  const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"
+  const tickColor  = isDark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.35)"
+
+  return (
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
+      <CardHeader className="shrink-0">
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${xCol} vs ${yCol}`}</CardTitle>}
+        {showDescription && (
+          <div className="flex items-center justify-between gap-2">
+            <CardDescription className="truncate">{description || `${xCol} × ${yCol} correlation`}</CardDescription>
+            {data.length > 0 && <span className="text-xs font-semibold text-foreground/70 tabular-nums shrink-0">{data.length} pts</span>}
+          </div>
+        )}
+      </CardHeader>
+      <CardContent className="flex-1 min-h-0 pb-4">
+        <div className="h-full w-full overflow-hidden">
+          <ScatterChart
+            width={item.w - 32}
+            height={item.h - 80}
+            margin={{ top: 8, right: 16, bottom: 24, left: 8 }}
+          >
+            <CartesianGrid stroke={gridColor} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="x"
+              type="number"
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 10, fill: tickColor }}
+              tickFormatter={n => fmtValue(n as number)}
+              label={{ value: xCol, position: "insideBottom", offset: -12, fontSize: 10, fill: tickColor }}
+            />
+            <YAxis
+              dataKey="y"
+              type="number"
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 10, fill: tickColor }}
+              tickFormatter={n => fmtValue(n as number)}
+              width={44}
+              label={{ value: yCol, angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: tickColor }}
+            />
+            <Tooltip
+              cursor={{ strokeDasharray: "3 3", stroke: gridColor }}
+              content={({ payload }) => {
+                if (!payload?.length) return null
+                const pt = payload[0]?.payload as { x: number; y: number } | undefined
+                if (!pt) return null
+                return (
+                  <div className="rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md">
+                    <div className="text-muted-foreground">{xCol}: <span className="font-medium text-foreground">{fmtValue(pt.x)}</span></div>
+                    <div className="text-muted-foreground">{yCol}: <span className="font-medium text-foreground">{fmtValue(pt.y)}</span></div>
+                  </div>
+                )
+              }}
+            />
+            <Scatter
+              data={data}
+              fill={paletteColor}
+              fillOpacity={0.65}
+              isAnimationActive={false}
+            />
+          </ScatterChart>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── ComboCard ────────────────────────────────────────────────────────────────
+
+function ComboCard({ item, columns, rows }: {
+  item: LayoutItem
+  columns: ColumnInfo[]
+  rows: string[][]
+}) {
+  if (!item.chart) return null
+  const palette = useContext(PaletteContext)
+  const { filters, dateFrom, dateTo } = useContext(FilterContext)
+  const { title, xCol, yCol, yCol2, agg, filter, filterFrom, filterTo, showTitle = true, showDescription = true, description } = item.chart
+
+  const xColInfo  = columns.find(c => c.name === xCol)
+  const yColInfo  = columns.find(c => c.name === yCol)
+  const yCol2Info = yCol2 ? columns.find(c => c.name === yCol2) : undefined
+  const dateCol   = columns.find(c => c.type === "date")
+  const ref       = dateCol ? dataMaxDate(rows, dateCol) : null
+
+  const usedRows = dateCol && filter && filter !== "all"
+    ? filterRows(rows, dateCol, filter, filterFrom, filterTo)
+    : rows
+  const filteredRows = applyGlobalFilter(usedRows, columns, filters, dateFrom, dateTo)
+
+  const data = xColInfo && yColInfo
+    ? yCol2Info
+      ? aggregateByXMulti(filteredRows, xColInfo, yColInfo, yCol2Info, agg)
+      : aggregateByX(filteredRows, xColInfo, yColInfo, agg)
+    : []
+
+  const filterLabel = ref && filter ? computeFilterLabel(filter, ref) : null
+  const filterKey = JSON.stringify(filters) + "|" + (dateFrom ?? "") + "|" + (dateTo ?? "")
+  const totalVal = data.reduce((s, d) => s + d.y, 0)
+
+  const chartCfg: ShadChartConfig = {
+    y:  { label: yCol,  theme: palette.primary },
+    ...(yCol2Info ? { y2: { label: yCol2, theme: palette.secondary } } : {}),
+  }
+
+  return (
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
+      <CardHeader className="shrink-0">
+        {showTitle && <CardTitle className="text-sm font-medium">{title || `${AGG_LABELS[agg]} ${yCol} by ${xCol}`}</CardTitle>}
+        {showDescription && (
+          <div className="flex items-center justify-between gap-2">
+            <CardDescription className="truncate">{description || filterLabel || `${AGG_LABELS[agg]} of ${yCol}${yCol2 ? ` + ${yCol2} trend` : ""}`}</CardDescription>
+            {data.length > 0 && <span className="text-xs font-semibold text-foreground/70 tabular-nums shrink-0">{fmtValue(totalVal)}</span>}
+          </div>
+        )}
+      </CardHeader>
+      <CardContent className="flex-1 min-h-0 pb-4">
+        <ChartContainer config={chartCfg} className="h-full w-full aspect-auto [&_.recharts-surface]:overflow-hidden">
+          <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="x"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              tickFormatter={(v: string) => v.length > 12 ? v.slice(0, 12) + "…" : v}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={n => fmtValue(n as number)}
+              width={48}
+            />
+            <ChartTooltip
+              cursor={false}
+              content={<ChartTooltipContent formatter={(v) => [fmtValue(typeof v === "number" ? v : 0), ""]} />}
+            />
+            <Bar dataKey="y" fill="var(--color-y)" radius={[4, 4, 0, 0]} maxBarSize={48} animationBegin={0} animationDuration={250} />
+            {yCol2Info && (
+              <Line dataKey="y2" type="monotone" stroke="var(--color-y2)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} animationBegin={0} animationDuration={250} />
+            )}
+          </ComposedChart>
+        </ChartContainer>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ─── TableCard ────────────────────────────────────────────────────────────────
 
 function TableCard({ item, columns, rows }: {
@@ -1304,9 +1596,9 @@ function TableCard({ item, columns, rows }: {
     .filter((c): c is ColumnInfo => !!c)
 
   return (
-    <Card className="h-full flex flex-col overflow-hidden rounded-2xl border-black/[0.06] shadow-sm dark:border-white/[0.06] dark:bg-card">
+    <Card className="h-full flex flex-col overflow-hidden rounded-xl ring-black/[0.06] dark:ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-none">
       <CardHeader className="shrink-0">
-        <CardTitle>{title || "Data Table"}</CardTitle>
+        <CardTitle className="text-sm font-medium">{title || "Data Table"}</CardTitle>
         {filterLabel && <CardDescription>{filterLabel}</CardDescription>}
       </CardHeader>
       <CardContent className="flex-1 min-h-0 p-0 overflow-auto">
@@ -1314,7 +1606,7 @@ function TableCard({ item, columns, rows }: {
           <TableHeader className="sticky top-0 bg-muted">
             <TableRow>
               {colInfos.map(col => (
-                <TableHead key={col.name}>{col.name}</TableHead>
+                <TableHead key={col.name} className={col.type === "number" ? "text-right" : ""}>{col.name}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -1326,9 +1618,9 @@ function TableCard({ item, columns, rows }: {
                 </TableCell>
               </TableRow>
             ) : displayRows.map((row, i) => (
-              <TableRow key={i}>
+              <TableRow key={i} className={i % 2 === 1 ? "bg-muted/30" : ""}>
                 {colInfos.map(col => (
-                  <TableCell key={col.name} className="text-xs">{row[col.index] ?? ""}</TableCell>
+                  <TableCell key={col.name} className={`text-xs ${col.type === "number" ? "text-right tabular-nums" : ""}`}>{row[col.index] ?? ""}</TableCell>
                 ))}
               </TableRow>
             ))}
@@ -1346,8 +1638,9 @@ function TableCard({ item, columns, rows }: {
 
 // ─── GridItem ─────────────────────────────────────────────────────────────────
 
-const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onDragMove, onEdit, onDuplicate, onDelete, onResizeEnd, projectedX, projectedY, children }: {
+const GridItem = React.memo(function GridItem({ item, index, canvasW, viewportRef, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, onDragMove, onEdit, onDuplicate, onDelete, onResizeEnd, projectedX, projectedY, children }: {
   item: LayoutItem
+  index: number
   canvasW: number
   viewportRef: React.MutableRefObject<{ panX: number; panY: number; scale: number }>
   isSelected: boolean
@@ -1415,7 +1708,6 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
 
     function onUp() {
       if (moved) { onUpdate(item.id, { x: snapX, y: snapY }); setLive(null); setGhost(null); onDragEnd() }
-      else { onSelect() }
       detach()
     }
 
@@ -1428,24 +1720,24 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
   return (
     <>
       {isDragging && ghost && (
-        <div aria-hidden className="pointer-events-none absolute rounded-xl border border-dashed border-muted-foreground/25 bg-muted/15"
-          style={{ left: ghost.x, top: ghost.y, width: item.w, height: item.h }} />
+        <div aria-hidden className="pointer-events-none absolute rounded-xl border-2 border-dashed border-blue-400/40 dark:border-blue-400/30 bg-blue-50/20 dark:bg-blue-500/10"
+          style={{ left: 0, top: 0, width: item.w, height: item.h, transform: `translate(${ghost.x}px,${ghost.y}px)` }} />
       )}
       <div
-        className={`absolute group/item select-none ${isDragging ? "z-50 cursor-grabbing" : "cursor-grab"}`}
+        className={`absolute group/item select-none animate-in fade-in-0 zoom-in-95 duration-200 ${isDragging ? "z-50 cursor-grabbing" : "cursor-grab"}`}
         style={{
-          left: dispX, top: dispY, width: item.w, height: item.h,
+          left: 0, top: 0, width: item.w, height: item.h,
           zIndex: isDragging ? 50 : isSelected ? 10 : undefined,
-          transition: (isDragging || isResizing) ? "none" : "left 0.25s cubic-bezier(0.34,1.56,0.64,1), top 0.25s cubic-bezier(0.34,1.56,0.64,1)",
+          transform: `translate(${dispX}px,${dispY}px)`,
+          transition: (isDragging || isResizing) ? "none" : "transform 0.18s cubic-bezier(0.2, 0, 0, 1)",
+          willChange: isDragging ? "transform" : "auto",
+          animationDelay: `${index * 30}ms`,
         }}
         onMouseDown={onMouseDown}
         onDoubleClick={e => { e.stopPropagation(); onEdit() }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }}
       >
-        <div
-          className="w-full h-full rounded-xl"
-          style={{ boxShadow: isSelected ? "0 0 0 2px var(--primary)" : undefined }}
-        >{children}</div>
+        <div className="w-full h-full rounded-xl">{children}</div>
         {!isDragging && (
           <ResizeHandles
             item={item}
@@ -1457,14 +1749,14 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
           />
         )}
 
-        {isSelected && !isDragging && (
+        {!isDragging && (
           <div
-            className="absolute top-2 right-2 z-20 flex items-center rounded-lg border border-border bg-background/90 backdrop-blur-sm shadow-md overflow-hidden"
+            className="absolute top-2 right-2 z-20 flex items-center rounded-lg border border-border/60 bg-white dark:bg-zinc-900 shadow-[0_2px_12px_rgba(0,0,0,0.10)] overflow-hidden opacity-0 group-hover/item:opacity-100 transition-opacity duration-150"
             onMouseDown={e => e.stopPropagation()}
           >
             <button
               onClick={e => { e.stopPropagation(); onEdit() }}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors"
             >
               <PencilIcon className="size-3" />
               Edit
@@ -1472,7 +1764,7 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
             <div className="w-px h-4 bg-border" />
             <button
               onClick={e => { e.stopPropagation(); onDuplicate() }}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
             >
               <CopyIcon className="size-3" />
               Duplicate
@@ -1480,7 +1772,7 @@ const GridItem = React.memo(function GridItem({ item, canvasW, viewportRef, isSe
             <div className="w-px h-4 bg-border" />
             <button
               onClick={e => { e.stopPropagation(); onDelete() }}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-destructive hover:bg-accent transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-rose-500 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 transition-colors"
             >
               <Trash2Icon className="size-3" />
               Delete
@@ -1805,11 +2097,12 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
 
   // ── viewport controls ────────────────────────────────────────────────────────
 
-  const fitToWindow = useCallback(() => {
+  const fitToWindow = useCallback((contentW?: number) => {
     const outer = outerRef.current
     if (!outer) return
-    const s = Math.min(outer.clientWidth / LOGICAL_W, 1)
-    const panX = Math.max(0, (outer.clientWidth - LOGICAL_W * s) / 2)
+    const w = contentW ?? LOGICAL_W
+    const s = Math.min(outer.clientWidth / w, 1)
+    const panX = Math.max(0, (outer.clientWidth - w * s) / 2)
     viewportRef.current = { panX, panY: 0, scale: s }
     applyTransform()
   }, [applyTransform])
@@ -1913,6 +2206,15 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     outer.addEventListener('wheel', onWheel, { passive: false })
     return () => outer.removeEventListener('wheel', onWheel)
   }, [])
+
+  // ── fit viewport to content on first tile load ──
+  const initialContentFitRef = useRef(false)
+  useEffect(() => {
+    if (initialContentFitRef.current || layout.length === 0) return
+    initialContentFitRef.current = true
+    const w = layout.reduce((m, it) => Math.max(m, it.x + it.w), 0) + SNAP * 4
+    fitToWindow(w)
+  }, [layout, fitToWindow])
 
   // ── localStorage: restore or save draft ──
   const DRAFT_KEY = sheetUrl ? `dashly_draft_${sheetUrl}` : null
@@ -2049,18 +2351,14 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     }
   }, [])
 
-  const onDragMove = useCallback((id: string, snapX: number, snapY: number) => {
-    if (dragRafRef.current !== null) cancelAnimationFrame(dragRafRef.current)
-    dragRafRef.current = requestAnimationFrame(() => {
-      const projected = computeCascade(layoutRef.current, id, snapX, snapY, canvasW, true)
-      if (projected) {
-        setDragProjection(new Map(
-          projected.filter(it => it.id !== id).map(it => [it.id, { x: it.x, y: it.y }])
-        ))
-      }
+  // Cascade preview disabled — computes once on drop in onUpdate instead.
+  // This eliminates per-snap DashboardGrid re-renders (which caused all chart cards to re-render).
+  const onDragMove = useCallback((_id: string, _snapX: number, _snapY: number) => {
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current)
       dragRafRef.current = null
-    })
-  }, [canvasW])
+    }
+  }, [])
 
   // ── drop ghost (shared between stat and chart drags) ──
   const [dropGhost, setDropGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -2206,11 +2504,13 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         const ty = Math.max(SNAP, snapTo((ev.clientY - rect.top) / s - CHART_GHOST_H / 2))
         const cols = columnsRef.current
         const catCol = cols.find(c => c.type === "category" || c.type === "text")
-        const numCol = cols.find(c => c.type === "number")
+        const numCols2 = cols.filter(c => c.type === "number")
+        const numCol = numCols2[0]
         setChartDialogType(chartType)
         setPendingChartPos({ x: tx, y: ty })
-        setChartConfigXCol(catCol?.name ?? cols.find(c => c.type !== "number" && c.type !== "id")?.name ?? "")
-        setChartConfigYCol(numCol?.name ?? "")
+        // scatter needs two numeric columns — default both axes to numeric cols
+        setChartConfigXCol(chartType === "scatter" ? (numCols2[0]?.name ?? "") : (catCol?.name ?? cols.find(c => c.type !== "number" && c.type !== "id")?.name ?? ""))
+        setChartConfigYCol(chartType === "scatter" ? (numCols2[1]?.name ?? numCols2[0]?.name ?? "") : (numCol?.name ?? ""))
         setChartConfigAgg("sum")
         setChartConfigTitle("")
         setChartConfigFilter("all")
@@ -2494,7 +2794,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       title: chartConfigTitle.trim() || autoTitle,
       filter: chartConfigFilter,
       filterLabel: ref ? computeFilterLabel(chartConfigFilter, ref) ?? undefined : undefined,
-      ...((chartDialogType === "line" || chartDialogType === "area") && {
+      ...((chartDialogType === "line" || chartDialogType === "area" || chartDialogType === "combo") && {
         yCol2: chartConfigYCol2 || undefined,
         smooth: chartConfigSmooth,
       }),
@@ -2591,6 +2891,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
     : null
   const previewFilterLabel = dataMaxRef ? computeFilterLabel(configFilter, dataMaxRef, cfFrom, cfTo) : null
   const canvasMinH = layout.reduce((m, it) => Math.max(m, it.y + it.h), 0) + SNAP * 2
+  const canvasMinW = layout.length > 0
+    ? layout.reduce((m, it) => Math.max(m, it.x + it.w), 0) + SNAP * 4
+    : LOGICAL_W
 
   return (
     <PaletteContext.Provider value={palette}>
@@ -2753,22 +3056,23 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                 return (
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Preview</p>
-                    <div className="bg-white dark:bg-card rounded-2xl border border-black/[0.06] dark:border-white/[0.06] shadow-sm flex flex-col gap-2 p-5 pointer-events-none select-none">
-                      <div className="flex items-start justify-between gap-1">
+                    <div className="relative bg-white dark:bg-card rounded-xl border border-black/[0.06] dark:border-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:shadow-none flex flex-col p-5 pointer-events-none select-none overflow-hidden">
+                      <div className="absolute inset-x-0 top-0 h-[2.5px] rounded-t-xl" style={{ background: paletteColor, opacity: 0.65 }} />
+                      <div className="flex items-start justify-between gap-1 mb-2.5">
                         {configShowLabel && (
-                          <p className="text-xs font-medium text-gray-400 dark:text-zinc-400 uppercase tracking-wide leading-none">{previewLabel}</p>
+                          <p className="text-[11px] font-medium text-gray-400 dark:text-zinc-500 uppercase tracking-[0.07em] leading-none">{previewLabel}</p>
                         )}
                         {trendStr && configShowBadge && (
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0 ${!trendStr.startsWith("-") ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/60 text-rose-500 dark:text-rose-400"}`}>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${!trendStr.startsWith("-") ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400" : "bg-rose-50 dark:bg-rose-950/50 text-rose-500 dark:text-rose-400"}`}>
                             {trendStr}
                           </span>
                         )}
                       </div>
-                      <p className="text-3xl font-bold text-gray-800 dark:text-zinc-100 tabular-nums leading-none">{previewVal}</p>
+                      <p className="text-[1.6rem] font-semibold text-gray-900 dark:text-zinc-50 tabular-nums leading-none">{previewVal}</p>
                       {configShowDescription && (
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className="h-1 w-8 rounded-full flex-shrink-0" style={{ background: paletteColor }} />
-                          <span className="text-[10px] text-gray-500 dark:text-zinc-400 leading-tight line-clamp-1">{footerText}</span>
+                        <div className="flex items-center gap-1.5 mt-3">
+                          <div className="h-[3px] w-5 rounded-full flex-shrink-0" style={{ background: paletteColor, opacity: 0.7 }} />
+                          <span className="text-[10px] text-gray-400 dark:text-zinc-500 leading-tight line-clamp-1">{footerText}</span>
                         </div>
                       )}
                     </div>
@@ -2853,20 +3157,26 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                       </div>
 
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="chart-x">{chartDialogType === "pie" ? "Slice by (category)" : "X axis (categories)"}</Label>
+                        <Label htmlFor="chart-x">
+                          {chartDialogType === "pie" ? "Slice by (category)" : chartDialogType === "scatter" ? "X axis (numeric)" : "X axis (categories)"}
+                        </Label>
                         <NativeSelect id="chart-x" value={chartConfigXCol} onChange={e => setChartConfigXCol(e.target.value)} className="w-full">
-                          {catCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
+                          {(chartDialogType === "scatter" ? numCols : catCols).map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
                         </NativeSelect>
                       </div>
 
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="chart-y">Y axis (values)</Label>
+                        <Label htmlFor="chart-y">{chartDialogType === "scatter" ? "Y axis (numeric)" : "Y axis (values)"}</Label>
                         <NativeSelect id="chart-y" value={chartConfigYCol} onChange={e => setChartConfigYCol(e.target.value)} className="w-full">
                           {numCols.map(c => <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>)}
                         </NativeSelect>
                       </div>
 
-                      <div className="flex flex-col gap-1.5">
+                      {chartDialogType === "scatter" && (
+                        <p className="text-xs text-muted-foreground -mt-2">Each row is plotted as a dot. Pick two numeric columns to show their relationship.</p>
+                      )}
+
+                      {chartDialogType !== "scatter" && <div className="flex flex-col gap-1.5">
                         <Label htmlFor="chart-agg">Aggregation</Label>
                         <NativeSelect id="chart-agg" value={chartConfigAgg} onChange={e => setChartConfigAgg(e.target.value as Agg)} className="w-full">
                           <NativeSelectOption value="sum">Sum</NativeSelectOption>
@@ -2875,9 +3185,9 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                           <NativeSelectOption value="max">Maximum</NativeSelectOption>
                           <NativeSelectOption value="min">Minimum</NativeSelectOption>
                         </NativeSelect>
-                      </div>
+                      </div>}
 
-                      {hasDates && (
+                      {hasDates && chartDialogType !== "scatter" && (
                         <div className="flex flex-col gap-1.5">
                           <div className="flex items-baseline justify-between">
                             <Label htmlFor="chart-filter">Period</Label>
@@ -2937,41 +3247,46 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                         </div>
                       )}
 
-                      {(chartDialogType === "line" || chartDialogType === "area") && (
+                      {(chartDialogType === "line" || chartDialogType === "area" || chartDialogType === "combo") && (
                         <>
                           <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="chart-y2">Second series <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                            <Label htmlFor="chart-y2">
+                              {chartDialogType === "combo" ? "Line overlay" : "Second series"}
+                              {chartDialogType !== "combo" && <span className="text-muted-foreground font-normal"> (optional)</span>}
+                            </Label>
                             <NativeSelect id="chart-y2" value={chartConfigYCol2} onChange={e => { setChartConfigYCol2(e.target.value); if (!e.target.value) { setChartConfigStacked(false); setChartConfigShowLegend(false) } }} className="w-full">
-                              <NativeSelectOption value="">None</NativeSelectOption>
+                              <NativeSelectOption value="">{chartDialogType === "combo" ? "None (bars only)" : "None"}</NativeSelectOption>
                               {numCols.filter(c => c.name !== chartConfigYCol).map(c => (
                                 <NativeSelectOption key={c.name} value={c.name}>{c.name}</NativeSelectOption>
                               ))}
                             </NativeSelect>
                           </div>
-                          <div className="flex flex-col gap-2">
-                            <label className="flex items-center gap-2 cursor-pointer select-none">
-                              <input type="checkbox" checked={chartConfigSmooth} onChange={e => setChartConfigSmooth(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
-                              <span className="text-sm text-muted-foreground">Smooth curve</span>
-                            </label>
-                            {chartDialogType === "line" && (
+                          {(chartDialogType === "line" || chartDialogType === "area") && (
+                            <div className="flex flex-col gap-2">
                               <label className="flex items-center gap-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={chartConfigShowLabels} onChange={e => setChartConfigShowLabels(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
-                                <span className="text-sm text-muted-foreground">Show data labels</span>
+                                <input type="checkbox" checked={chartConfigSmooth} onChange={e => setChartConfigSmooth(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
+                                <span className="text-sm text-muted-foreground">Smooth curve</span>
                               </label>
-                            )}
-                            {chartDialogType === "area" && chartConfigYCol2 && (
-                              <>
+                              {chartDialogType === "line" && (
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                                  <input type="checkbox" checked={chartConfigStacked} onChange={e => setChartConfigStacked(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
-                                  <span className="text-sm text-muted-foreground">Stack series</span>
+                                  <input type="checkbox" checked={chartConfigShowLabels} onChange={e => setChartConfigShowLabels(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
+                                  <span className="text-sm text-muted-foreground">Show data labels</span>
                                 </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
-                                  <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
-                                  <span className="text-sm text-muted-foreground">Show legend</span>
-                                </label>
-                              </>
-                            )}
-                          </div>
+                              )}
+                              {chartDialogType === "area" && chartConfigYCol2 && (
+                                <>
+                                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                                    <input type="checkbox" checked={chartConfigStacked} onChange={e => setChartConfigStacked(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
+                                    <span className="text-sm text-muted-foreground">Stack series</span>
+                                  </label>
+                                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                                    <input type="checkbox" checked={chartConfigShowLegend} onChange={e => setChartConfigShowLegend(e.target.checked)} className="size-4 rounded border-input accent-blue-500" />
+                                    <span className="text-sm text-muted-foreground">Show legend</span>
+                                  </label>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </>
                       )}
                     </>
@@ -2989,7 +3304,11 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                         : chartDialogType === "area"
                         ? <AreaCard  item={previewChartItem} columns={columns} rows={rows} isPreview />
                         : chartDialogType === "pie"
-                        ? <PieCard   item={previewChartItem} columns={columns} rows={rows} isPreview />
+                        ? <PieCard     item={previewChartItem} columns={columns} rows={rows} isPreview />
+                        : chartDialogType === "scatter"
+                        ? <ScatterCard item={previewChartItem} columns={columns} rows={rows} />
+                        : chartDialogType === "combo"
+                        ? <ComboCard   item={previewChartItem} columns={columns} rows={rows} />
                         : <ChartCard item={previewChartItem} columns={columns} rows={rows} isPreview onToggleOrientation={() => setChartConfigOrientation(prev => prev === "horizontal" ? "vertical" : "horizontal")} />)}
                     </div>
                   ) : (
@@ -3106,29 +3425,44 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
       })()}
 
       {/* ── canvas viewport ── */}
-      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-[#f0f6ff] dark:bg-muted/60" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
-        {/* Dot grid — matches landing page texture */}
+      <div ref={outerRef} className="flex-1 overflow-hidden relative bg-[#eef1f8] dark:bg-[#0f1117]" style={{ cursor: 'grab' }} onMouseDown={onGutterMouseDown} onContextMenu={onViewportContextMenu}>
+        {/* Dot grid */}
         <div className="absolute inset-0 pointer-events-none" aria-hidden
-          style={{ backgroundImage: "radial-gradient(circle, #93c5fd 1px, transparent 1px)", backgroundSize: "28px 28px", opacity: 0.45 }}
+          style={{ backgroundImage: `radial-gradient(circle, ${isDark ? "rgba(255,255,255,0.08)" : "#bfcad8"} 1px, transparent 1px)`, backgroundSize: "24px 24px" }}
         />
         <div
           ref={canvasRef}
           data-dashboard-canvas
-          className="absolute top-0 left-0 bg-white dark:bg-background shadow-2xl rounded-3xl overflow-hidden"
-          style={{ width: LOGICAL_W, height: canvasMinH, transformOrigin: '0 0', willChange: 'transform' }}
+          className="absolute top-0 left-0 bg-white dark:bg-background shadow-[0_8px_40px_rgba(0,0,0,0.10)] dark:shadow-[0_8px_40px_rgba(0,0,0,0.50)] rounded-2xl overflow-hidden"
+          style={{ width: canvasMinW, height: canvasMinH, transformOrigin: '0 0', willChange: 'transform' }}
           onMouseDown={onPanStart}
           onContextMenu={onViewportContextMenu}
         >
           {dragging && <div className="fixed inset-0 z-40 cursor-grabbing" />}
           <div className={`dot-grid pointer-events-none absolute inset-0 transition-opacity duration-500 ${dragging ? "opacity-100" : "opacity-[0.08]"}`} />
           {dropGhost && (
-            <div aria-hidden className="pointer-events-none absolute rounded-xl border border-dashed border-muted-foreground/25 bg-muted/15"
-              style={{ left: dropGhost.x, top: dropGhost.y, width: dropGhost.w, height: dropGhost.h }} />
+            <div aria-hidden className="pointer-events-none absolute rounded-xl border-2 border-dashed border-blue-400/50 dark:border-blue-400/40 bg-blue-50/30 dark:bg-blue-500/10 transition-all"
+              style={{ left: 0, top: 0, width: dropGhost.w, height: dropGhost.h, transform: `translate(${dropGhost.x}px,${dropGhost.y}px)` }} />
           )}
 
-          {layout.map(item => (
+          {layout.length === 0 && !dropGhost && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none select-none">
+              <div className="flex flex-col items-center gap-2 opacity-40">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className="text-foreground/40">
+                  <rect x="4" y="4" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2"/>
+                  <rect x="26" y="4" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2"/>
+                  <rect x="4" y="22" width="40" height="22" rx="2" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2"/>
+                  <path d="M24 10v6M21 13h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <p className="text-sm font-medium text-foreground/60">Drag tiles from the sidebar to build your dashboard</p>
+                <p className="text-xs text-foreground/40">Or use the demo at <span className="font-mono">/dashboard?demo=true</span></p>
+              </div>
+            </div>
+          )}
+
+          {layout.map((item, index) => (
             <GridItem
-              key={item.id} item={item} canvasW={canvasW} viewportRef={viewportRef}
+              key={item.id} item={item} index={index} canvasW={canvasW} viewportRef={viewportRef}
               projectedX={dragProjection?.get(item.id)?.x}
               projectedY={dragProjection?.get(item.id)?.y}
               isSelected={selectedId === item.id}
@@ -3151,6 +3485,10 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
                   ? <AreaCard item={item} columns={columns} rows={rows} />
                   : item.chart?.type === "pie"
                   ? <PieCard item={item} columns={columns} rows={rows} />
+                  : item.chart?.type === "scatter"
+                  ? <ScatterCard item={item} columns={columns} rows={rows} />
+                  : item.chart?.type === "combo"
+                  ? <ComboCard item={item} columns={columns} rows={rows} />
                   : <ChartCard
                       item={item}
                       columns={columns}
@@ -3197,18 +3535,14 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
         <FilterPanel columns={columns} rows={rows} open={filterPanelOpen} onClose={() => setFilterPanelOpen(false)} />
 
         {/* zoom controls */}
-        <div className="absolute bottom-4 right-4 z-50 flex items-center gap-0.5 bg-white dark:bg-background/90 border border-black/[0.06] dark:border-white/[0.08] rounded-full shadow-md px-1.5 py-1">
-          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={() => doZoom(0.8)}>
-            <span className="text-sm leading-none select-none">−</span>
-          </Button>
-          <span ref={zoomLabelRef} className="text-xs tabular-nums w-10 text-center text-muted-foreground select-none">100%</span>
-          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={() => doZoom(1.25)}>
-            <span className="text-sm leading-none select-none">+</span>
-          </Button>
-          <div className="w-px h-3.5 bg-black/[0.08] dark:bg-white/[0.12] mx-0.5" />
-          <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground" onClick={fitToWindow} title="Fit to window">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/></svg>
-          </Button>
+        <div className="absolute bottom-4 right-4 z-50 flex items-center gap-0 bg-white dark:bg-zinc-900 border border-black/[0.08] dark:border-white/[0.1] rounded-xl shadow-[0_2px_12px_rgba(0,0,0,0.10)] dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)] overflow-hidden select-none" onMouseDown={e => e.stopPropagation()}>
+          <button className="flex items-center justify-center w-8 h-8 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-base font-light leading-none" onClick={() => doZoom(0.8)} title="Zoom out">−</button>
+          <span ref={zoomLabelRef} className="text-[11px] tabular-nums w-10 text-center text-muted-foreground font-medium border-x border-black/[0.06] dark:border-white/[0.08] h-8 flex items-center justify-center">100%</span>
+          <button className="flex items-center justify-center w-8 h-8 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-base font-light leading-none" onClick={() => doZoom(1.25)} title="Zoom in">+</button>
+          <div className="w-px h-4 bg-black/[0.06] dark:bg-white/[0.08] mx-0.5" />
+          <button className="flex items-center justify-center w-8 h-8 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" onClick={() => fitToWindow(canvasMinW)} title="Fit to window">
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="1" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/><rect x="7" y="7" width="4" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2"/></svg>
+          </button>
         </div>
       </div>{/* outer viewport */}
 
@@ -3243,7 +3577,7 @@ export function DashboardGrid({ columns = [], rows = [], paletteId, customColor,
             <div className="my-1 border-t border-border" />
             <button
               className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-              onClick={() => { fitToWindow(); setCanvasMenu(null) }}
+              onClick={() => { fitToWindow(canvasMinW); setCanvasMenu(null) }}
             >
               <ScanIcon className="size-3.5 shrink-0" />
               Fit to window

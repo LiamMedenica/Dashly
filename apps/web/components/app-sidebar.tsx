@@ -11,16 +11,10 @@ import {
   HoverCardTrigger,
 } from "@workspace/ui/components/hover-card"
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@workspace/ui/components/collapsible"
-import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -46,20 +40,24 @@ import {
   CircleHelpIcon,
   TableIcon,
   TypeIcon,
+  ActivityIcon,
+  TrendingUpIcon,
+  GripVertical,
 } from "lucide-react"
 import { type ColumnInfo } from "@/lib/analyze"
 import {
-  Area, AreaChart,
-  Bar, BarChart,
-  Line, LineChart,
   Pie, PieChart, Cell,
+  ComposedChart, Bar, Line,
 } from "recharts"
 
-const PREVIEW_DATA = [
-  { v: 28 }, { v: 45 }, { v: 32 }, { v: 58 }, { v: 40 }, { v: 62 }, { v: 50 },
-]
+const VALS    = [28, 45, 32, 58, 40, 62, 50]
 const PIE_DATA = [{ v: 40 }, { v: 28 }, { v: 20 }, { v: 12 }]
 const PIE_OPACITIES = [1, 0.65, 0.4, 0.2]
+const SCATTER_PTS = [
+  { x: 12, y: 34 }, { x: 28, y: 52 }, { x: 45, y: 38 }, { x: 18, y: 61 }, { x: 55, y: 44 },
+  { x: 30, y: 28 }, { x: 62, y: 70 }, { x: 8,  y: 20 }, { x: 40, y: 55 }, { x: 50, y: 48 },
+]
+const COMBO_DATA = VALS.map(v => ({ v }))
 
 function AnimatedStat() {
   const target = 2451
@@ -85,35 +83,138 @@ function AnimatedStat() {
   )
 }
 
-function ChartPreview({ title }: { title: string }) {
-  if (title === "Bar Chart") return (
-    <div className="text-primary">
-      <BarChart width={152} height={56} data={PREVIEW_DATA} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-        <Bar dataKey="v" fill="currentColor" radius={2} animationDuration={900} />
-      </BarChart>
-    </div>
-  )
+// ── chart data helpers ──────────────────────────────────────────────────────
+const W = 152, H = 48, PAD = 4
+const MAX_V = 62
+function vPts() {
+  return VALS.map((v, i) => ({
+    x: (i / (VALS.length - 1)) * W,
+    y: PAD + (1 - v / MAX_V) * H,
+  }))
+}
+function linePath(pts: { x: number; y: number }[]) {
+  return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ")
+}
 
-  if (title === "Area Chart") return (
-    <div className="text-primary">
-      <AreaChart width={152} height={56} data={PREVIEW_DATA} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-        <Area type="monotone" dataKey="v" stroke="currentColor" fill="currentColor" fillOpacity={0.15} strokeWidth={2} dot={false} animationDuration={900} />
-      </AreaChart>
-    </div>
-  )
+function ChartPreview({ title, animKey = 0 }: { title: string; animKey?: number }) {
+  const blue = "#3b82f6"
 
+  // ── Bar Chart ─────────────────────────────────────────────────────────────
+  if (title === "Bar Chart") {
+    const barW = 15, gap = (W - VALS.length * barW) / (VALS.length + 1)
+    return (
+      <svg key={animKey} width={W} height={H + PAD * 2} style={{ overflow: "visible" }}>
+        {VALS.map((v, i) => {
+          const bh = Math.round((v / MAX_V) * H)
+          return (
+            <rect
+              key={i}
+              x={gap + i * (barW + gap)} y={H + PAD - bh}
+              width={barW} height={bh}
+              fill={blue} rx={3}
+              className="sidebar-bar"
+              style={{ animationDelay: `${i * 50}ms` }}
+            />
+          )
+        })}
+      </svg>
+    )
+  }
+
+  // ── Line Chart ────────────────────────────────────────────────────────────
+  if (title === "Line Chart") {
+    const pts = vPts()
+    return (
+      <svg key={animKey} width={W} height={H + PAD * 2}>
+        <path
+          d={linePath(pts)}
+          fill="none" stroke={blue} strokeWidth={2.5}
+          strokeLinecap="round" strokeLinejoin="round"
+          className="sidebar-line-path" pathLength="1"
+        />
+      </svg>
+    )
+  }
+
+  // ── Area Chart ────────────────────────────────────────────────────────────
+  if (title === "Area Chart") {
+    const pts = vPts()
+    const lp  = linePath(pts)
+    const ap  = `${lp} L ${W} ${H + PAD} L 0 ${H + PAD} Z`
+    return (
+      <svg key={animKey} width={W} height={H + PAD * 2}>
+        <defs>
+          <linearGradient id="sp-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor={blue} stopOpacity={0.28} />
+            <stop offset="100%" stopColor={blue} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <path d={ap} fill="url(#sp-area)" className="sidebar-area-fill" />
+        <path d={lp} fill="none" stroke={blue} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="sidebar-line-path" pathLength="1" />
+      </svg>
+    )
+  }
+
+  // ── Pie Chart ─────────────────────────────────────────────────────────────
   if (title === "Pie Chart") return (
-    <div className="text-primary">
-      <PieChart width={152} height={56}>
-        <Pie data={PIE_DATA} dataKey="v" cx={76} cy={28} outerRadius={24} animationBegin={0} animationDuration={900}>
-          {PIE_DATA.map((_, i) => <Cell key={i} fill="currentColor" fillOpacity={PIE_OPACITIES[i]} />)}
-        </Pie>
-      </PieChart>
-    </div>
+    <PieChart width={W} height={H + PAD * 2}>
+      <Pie data={PIE_DATA} dataKey="v" cx={W / 2} cy={(H + PAD * 2) / 2} outerRadius={24} animationBegin={0} animationDuration={700}>
+        {PIE_DATA.map((_, i) => <Cell key={i} fill={blue} fillOpacity={PIE_OPACITIES[i]} />)}
+      </Pie>
+    </PieChart>
   )
 
+  // ── Scatter Chart ─────────────────────────────────────────────────────────
+  if (title === "Scatter Chart") {
+    const xMax = 70, yMax = 75
+    return (
+      <svg key={animKey} width={W} height={H + PAD * 2}>
+        {SCATTER_PTS.map((p, i) => (
+          <circle
+            key={i}
+            cx={(p.x / xMax) * (W - 16) + 8}
+            cy={(H + PAD * 2) - (p.y / yMax) * (H) - 6}
+            r={3.5} fill={blue} fillOpacity={0.75}
+            className="sidebar-dot"
+            style={{ animationDelay: `${i * 40}ms` }}
+          />
+        ))}
+      </svg>
+    )
+  }
+
+  // ── Combo Chart ───────────────────────────────────────────────────────────
+  if (title === "Combo Chart") {
+    const barW = 15, gap = (W - VALS.length * barW) / (VALS.length + 1)
+    const pts = VALS.map((v, i) => ({
+      x: gap + i * (barW + gap) + barW / 2,
+      y: PAD + (1 - v / MAX_V) * H,
+    }))
+    const lp = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ")
+    return (
+      <svg key={animKey} width={W} height={H + PAD * 2} style={{ overflow: "visible" }}>
+        {VALS.map((v, i) => {
+          const bh = Math.round((v / MAX_V) * H)
+          return (
+            <rect
+              key={i}
+              x={gap + i * (barW + gap)} y={H + PAD - bh}
+              width={barW} height={bh}
+              fill={blue} fillOpacity={0.35} rx={3}
+              className="sidebar-bar"
+              style={{ animationDelay: `${i * 50}ms` }}
+            />
+          )
+        })}
+        <path d={lp} fill="none" stroke={blue} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="sidebar-line-path" pathLength="1" style={{ animationDelay: "200ms" }} />
+      </svg>
+    )
+  }
+
+  // ── Stat Card ─────────────────────────────────────────────────────────────
   if (title === "Stat Card") return <AnimatedStat />
 
+  // ── Table ─────────────────────────────────────────────────────────────────
   if (title === "Table") return (
     <div className="h-14 flex flex-col gap-px text-[9px] overflow-hidden mt-1">
       <div className="flex gap-2 px-1 py-0.5 bg-muted rounded font-medium text-muted-foreground">
@@ -127,6 +228,7 @@ function ChartPreview({ title }: { title: string }) {
     </div>
   )
 
+  // ── Text Box ──────────────────────────────────────────────────────────────
   if (title === "Text Box") return (
     <div className="h-14 flex flex-col justify-center gap-1 overflow-hidden px-0.5">
       <p className="text-xs font-semibold leading-tight text-foreground">Dashboard Title</p>
@@ -134,13 +236,7 @@ function ChartPreview({ title }: { title: string }) {
     </div>
   )
 
-  return (
-    <div className="text-primary">
-      <LineChart width={152} height={56} data={PREVIEW_DATA} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-        <Line type="monotone" dataKey="v" stroke="currentColor" strokeWidth={2} dot={false} animationDuration={900} />
-      </LineChart>
-    </div>
-  )
+  return null
 }
 
 function ColTypeIcon({ type }: { type: ColumnInfo["type"] }) {
@@ -157,44 +253,56 @@ function ColTypeIcon({ type }: { type: ColumnInfo["type"] }) {
 const CHART_TYPES = [
   {
     title: "Bar Chart",
-    icon: <BarChart3Icon className="size-3.5 shrink-0" />,
-    description: "Compare values across categories side by side.",
+    icon: BarChart3Icon,
+    description: "Compare values across categories.",
     onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "bar" } })),
   },
   {
     title: "Line Chart",
-    icon: <LineChartIcon className="size-3.5 shrink-0" />,
+    icon: LineChartIcon,
     description: "Track how a value changes over time.",
     onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "line" } })),
   },
   {
     title: "Area Chart",
-    icon: <AreaChartIcon className="size-3.5 shrink-0" />,
-    description: "Like a line chart but with the area beneath filled in.",
+    icon: AreaChartIcon,
+    description: "Like a line chart with filled area.",
     onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "area" } })),
   },
   {
     title: "Pie Chart",
-    icon: <PieChartIcon className="size-3.5 shrink-0" />,
-    description: "Show each category as a slice of the total.",
+    icon: PieChartIcon,
+    description: "Show each category as a slice.",
     onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "pie" } })),
   },
   {
+    title: "Scatter Chart",
+    icon: ActivityIcon,
+    description: "Plot two numeric columns.",
+    onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "scatter" } })),
+  },
+  {
+    title: "Combo Chart",
+    icon: TrendingUpIcon,
+    description: "Bars for volume with a trend line.",
+    onDrag: () => window.dispatchEvent(new CustomEvent("sidebar-drag-chart", { detail: { type: "combo" } })),
+  },
+  {
     title: "Stat Card",
-    icon: <HashIcon className="size-3.5 shrink-0" />,
-    description: "Highlight a single key number at a glance.",
+    icon: HashIcon,
+    description: "Highlight a single key number.",
     onDrag: () => window.dispatchEvent(new Event("sidebar-drag-stat")),
   },
   {
     title: "Table",
-    icon: <TableIcon className="size-3.5 shrink-0" />,
-    description: "Browse your raw data in a structured grid.",
+    icon: TableIcon,
+    description: "Browse raw data in a grid.",
     onDrag: () => window.dispatchEvent(new Event("sidebar-drag-table")),
   },
   {
     title: "Text Box",
-    icon: <TypeIcon className="size-3.5 shrink-0" />,
-    description: "Add headings, annotations, or notes with rich text formatting.",
+    icon: TypeIcon,
+    description: "Add headings or annotations.",
     onDrag: () => window.dispatchEvent(new Event("sidebar-drag-text")),
   },
 ]
@@ -203,6 +311,81 @@ const NAV_SECONDARY = [
   { title: "Settings", url: "#", icon: <Settings2Icon /> },
   { title: "Get Help",  url: "#", icon: <CircleHelpIcon /> },
 ]
+
+function AnimatedSection({
+  icon: Icon,
+  label,
+  defaultOpen = true,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = React.useState(defaultOpen)
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        className="font-semibold"
+        onClick={() => setOpen(o => !o)}
+      >
+        <Icon className="size-4" />
+        <span>{label}</span>
+        <ChevronRightIcon
+          className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-250"
+          style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}
+        />
+      </SidebarMenuButton>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: open ? "1fr" : "0fr",
+          transition: "grid-template-rows 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
+        }}
+      >
+        <div style={{ overflow: "hidden" }}>
+          {children}
+        </div>
+      </div>
+    </SidebarMenuItem>
+  )
+}
+
+function ChartTileItem({ ct }: { ct: typeof CHART_TYPES[number] }) {
+  const [animKey, setAnimKey] = React.useState(0)
+  const Icon = ct.icon
+
+  return (
+    <HoverCard>
+      <SidebarMenuSubItem>
+        <HoverCardTrigger
+          render={
+            <div
+              onMouseDown={e => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                ct.onDrag()
+              }}
+              onMouseEnter={() => setAnimKey(k => k + 1)}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              style={{ cursor: "grab" }}
+            />
+          }
+        >
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>{ct.title}</span>
+          <GripVertical className="ml-auto size-3.5 shrink-0 text-muted-foreground/30 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </HoverCardTrigger>
+        <HoverCardContent side="right" sideOffset={12} className="w-44">
+          <ChartPreview title={ct.title} animKey={animKey} />
+          <p className="font-semibold text-xs mt-2 mb-0.5">{ct.title}</p>
+          <p className="text-xs text-muted-foreground leading-snug">{ct.description}</p>
+        </HoverCardContent>
+      </SidebarMenuSubItem>
+    </HoverCard>
+  )
+}
 
 export function AppSidebar({
   dashboardName,
@@ -245,7 +428,7 @@ export function AppSidebar({
               className="data-[slot=sidebar-menu-button]:p-1.5!"
               render={<a href="/" />}
             >
-              <span className="text-base font-bold tracking-tight" style={{ color: "#3b82f6" }}>DataBubble</span>
+              <span className="text-base font-extrabold tracking-tight" style={{ color: "#3b82f6" }}>DataBubble</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -258,67 +441,28 @@ export function AppSidebar({
           <>
             <SidebarSeparator />
             <SidebarGroup>
-              <SidebarGroupLabel>{dashboardName}</SidebarGroupLabel>
               <SidebarMenu>
-                <Collapsible defaultOpen className="group/collapsible" render={<SidebarMenuItem />}>
-                  <CollapsibleTrigger render={<SidebarMenuButton />}>
-                    <BarChart3Icon />
-                    <span>Charts</span>
-                    <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-open/collapsible:rotate-90" />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      {CHART_TYPES.map(ct => (
-                        <HoverCard key={ct.title}>
-                          <SidebarMenuSubItem>
-                            <HoverCardTrigger
-                              render={
-                                <div
-                                  onMouseDown={e => {
-                                    if (e.button !== 0) return
-                                    e.preventDefault()
-                                    ct.onDrag()
-                                  }}
-                                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                  style={{ cursor: "grab" }}
-                                />
-                              }
-                            >
-                              {ct.icon}
-                              <span>{ct.title}</span>
-                            </HoverCardTrigger>
-                            <HoverCardContent side="right" sideOffset={12} className="w-44">
-                              <ChartPreview title={ct.title} />
-                              <p className="font-medium text-xs mt-2 mb-0.5">{ct.title}</p>
-                              <p className="text-xs text-muted-foreground leading-snug">{ct.description}</p>
-                            </HoverCardContent>
-                          </SidebarMenuSubItem>
-                        </HoverCard>
-                      ))}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </Collapsible>
+                <AnimatedSection icon={BarChart3Icon} label="Charts & Tiles" defaultOpen>
+                  <SidebarMenuSub>
+                    {CHART_TYPES.map(ct => (
+                      <ChartTileItem key={ct.title} ct={ct} />
+                    ))}
+                  </SidebarMenuSub>
+                </AnimatedSection>
 
                 {columns.length > 0 && (
-                  <Collapsible className="group/collapsible" render={<SidebarMenuItem />}>
-                    <CollapsibleTrigger render={<SidebarMenuButton />}>
-                      <DatabaseIcon />
-                      <span>Data</span>
-                      <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-open/collapsible:rotate-90" />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {columns.map(col => (
-                          <SidebarMenuSubItem key={col.name}>
-                            <SidebarMenuSubButton>
-                              <ColTypeIcon type={col.type} />
-                              <span className="truncate">{col.name}</span>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </Collapsible>
+                  <AnimatedSection icon={DatabaseIcon} label="Data" defaultOpen={false}>
+                    <SidebarMenuSub>
+                      {columns.map(col => (
+                        <SidebarMenuSubItem key={col.name}>
+                          <SidebarMenuSubButton>
+                            <ColTypeIcon type={col.type} />
+                            <span className="truncate">{col.name}</span>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </AnimatedSection>
                 )}
               </SidebarMenu>
             </SidebarGroup>

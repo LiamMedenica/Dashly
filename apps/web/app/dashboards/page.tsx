@@ -117,7 +117,7 @@ function DashboardPreview({ dash }: { dash: Dashboard }) {
     padT + chartH - (v / max) * chartH,
   ])
   const linePath = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ")
-  const areaPath = `${linePath} L${pts[pts.length - 1][0].toFixed(1)} ${(padT + chartH).toFixed(1)} L${padL} ${(padT + chartH).toFixed(1)} Z`
+  const areaPath = `${linePath} L${pts[pts.length - 1]![0].toFixed(1)} ${(padT + chartH).toFixed(1)} L${padL} ${(padT + chartH).toFixed(1)} Z`
 
   return (
     <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
@@ -145,7 +145,7 @@ function DashboardPreview({ dash }: { dash: Dashboard }) {
       ))}
       {months.filter((_, i) => i % Math.ceil(months.length / 5) === 0).map((m, idx) => {
         const i = idx * Math.ceil(months.length / 5)
-        const [x] = pts[Math.min(i, pts.length - 1)]
+        const [x] = pts[Math.min(i, pts.length - 1)]!
         return (
           <text key={m} x={x} y={H - 2} textAnchor="middle" fontSize={6.5} fill="currentColor" fillOpacity={0.35} fontFamily="sans-serif">{m}</text>
         )
